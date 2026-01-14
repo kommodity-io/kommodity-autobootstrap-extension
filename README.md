@@ -156,7 +156,7 @@ The extension is configured via environment variables:
 | `TALOS_AUTO_BOOTSTRAP_LOG_LEVEL` | Logging verbosity: debug, info, warn, error | `info` |
 | `TALOS_AUTO_BOOTSTRAP_SCAN_INTERVAL` | Interval between network discovery scans | `30s` |
 | `TALOS_AUTO_BOOTSTRAP_FOLLOWER_CHECK_INTERVAL` | How often followers check bootstrap status | `15s` |
-| `TALOS_AUTO_BOOTSTRAP_MIN_NODES` | Minimum control plane nodes for quorum | `1` |
+| `TALOS_AUTO_BOOTSTRAP_QUORUM_NODES` | Expected number of control plane nodes required for quorum before bootstrapping | `1` |
 | `TALOS_AUTO_BOOTSTRAP_PRE_BOOTSTRAP_DELAY` | Leader wait time before executing bootstrap | `10s` |
 | `TALOS_AUTO_BOOTSTRAP_MAX_BACKOFF` | Maximum retry backoff duration | `2m` |
 | `TALOS_AUTO_BOOTSTRAP_SCAN_TIMEOUT` | Timeout for probing each node | `2s` |
@@ -186,7 +186,7 @@ machine:
       - image: ghcr.io/kommodity-io/talos-auto-bootstrap:v1.0.0
   env:
     TALOS_AUTO_BOOTSTRAP_LOG_LEVEL: info
-    TALOS_AUTO_BOOTSTRAP_MIN_NODES: "3"
+    TALOS_AUTO_BOOTSTRAP_QUORUM_NODES: "3"
     TALOS_AUTO_BOOTSTRAP_PRE_BOOTSTRAP_DELAY: "20s"
 ```
 
