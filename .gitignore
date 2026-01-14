@@ -1,0 +1,29 @@
+# Ignore built binaries.
+bin/
+talos-auto-bootstrap
+
+# Test artifacts
+*.test
+coverage.out
+coverage.html
+
+# Ignore the environment configuration files.
+.env
+
+# Ignore self-signed certs by API Server
+cmd/kommodity/apiserver.local.config/
+apiserver.local.config/
+
+# Ignore vs code debug files.
+.vscode/
+__debug*
+.cursor/
+
+# Generated files
+pkg/openapi/zz_generated.openapi.go
+
+.DS_Store
+
+# Terraform files
+.terraform*
+.debug/

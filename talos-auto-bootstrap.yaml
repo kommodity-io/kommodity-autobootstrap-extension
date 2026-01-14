@@ -1,0 +1,21 @@
+name: talos-auto-bootstrap
+container:
+  entrypoint: ./talos-auto-bootstrap
+  environment:
+    - TALOS_AUTO_BOOTSTRAP_LOG_LEVEL=info
+    - TALOS_AUTO_BOOTSTRAP_SCAN_INTERVAL=30s
+    - TALOS_AUTO_BOOTSTRAP_FOLLOWER_CHECK_INTERVAL=15s
+    - TALOS_AUTO_BOOTSTRAP_MIN_NODES=1
+    - TALOS_AUTO_BOOTSTRAP_PRE_BOOTSTRAP_DELAY=10s
+    - TALOS_AUTO_BOOTSTRAP_MAX_BACKOFF=2m
+    - TALOS_AUTO_BOOTSTRAP_SCAN_TIMEOUT=2s
+    - TALOS_AUTO_BOOTSTRAP_SCAN_CONCURRENCY=50
+depends:
+  - service: machined
+  - path: /run/machined/machined.sock
+  - network:
+      - addresses
+      - connectivity
+      - hostname
+      - etcfiles
+restart: untilSuccess

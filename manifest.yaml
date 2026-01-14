@@ -1,0 +1,9 @@
+version: v1alpha1
+metadata:
+  name: talos-auto-bootstrap
+  version: 1.0.0
+  author: Kommodity
+  description: Automatic Kubernetes cluster bootstrap for Talos Linux
+compatibility:
+  talos:
+    version: ">= v1.6.0"
