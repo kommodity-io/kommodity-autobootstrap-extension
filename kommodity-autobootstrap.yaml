@@ -12,7 +12,7 @@ container:
     - TALOS_AUTO_BOOTSTRAP_SCAN_CONCURRENCY=50
 depends:
   - service: machined
-  - path: /run/machined/machined.sock
+  - path: /system/run/machined/machine.sock
   - network:
       - addresses
       - connectivity
