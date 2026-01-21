@@ -6,13 +6,11 @@ on:
       - main
     paths-ignore:
       - "**/*.md"
-      - .github/workflows/**/*.yml
   pull_request:
     branches:
       - main
     paths-ignore:
       - "**/*.md"
-      - .github/workflows/**/*.yml
 
 jobs:
   lint:
