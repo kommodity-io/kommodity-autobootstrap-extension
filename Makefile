@@ -8,7 +8,7 @@ GO_FLAGS		:= -ldflags "-X 'k8s.io/component-base/version.gitVersion=$(VERSION)' 
 SOURCES			:= $(shell find . -name '*.go')
 UPX_FLAGS		?= -qq
 
-IMAGE ?= ghcr.io/kommodity-io/kommodity-auto-bootstrap-extension
+IMAGE ?= ghcr.io/kommodity-io/kommodity-autobootstrap-extension
 CONTAINER_RUNTIME ?= docker
 
 LINTER := bin/golangci-lint
@@ -20,9 +20,9 @@ $(LINTER):
 
 # Build the binary for Linux
 build: $(SOURCES) ## Build the application.
-	go build $(GO_FLAGS) -o bin/talos-auto-bootstrap ./cmd/talos-auto-bootstrap/main.go
+	go build $(GO_FLAGS) -o bin/kommodity-autobootstrap-extension ./cmd/kommodity-autobootstrap-extension/main.go
 ifneq ($(UPX_FLAGS),)
-	upx $(UPX_FLAGS) bin/talos-auto-bootstrap
+	upx $(UPX_FLAGS) bin/kommodity-autobootstrap-extension
 endif
 
 # Run tests

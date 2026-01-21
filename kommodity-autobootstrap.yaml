@@ -1,6 +1,6 @@
-name: talos-auto-bootstrap
+name: kommodity-autobootstrap
 container:
-  entrypoint: ./talos-auto-bootstrap
+  entrypoint: ./kommodity-autobootstrap-extension
   environment:
     - TALOS_AUTO_BOOTSTRAP_LOG_LEVEL=info
     - TALOS_AUTO_BOOTSTRAP_SCAN_INTERVAL=30s
