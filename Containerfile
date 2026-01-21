@@ -22,12 +22,12 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 make build UPX_FLAGS= VERSION=${VERSIO
 FROM scratch
 
 # Copy binary to Talos extension location
-COPY --from=builder /app/bin/talos-auto-bootstrap \
-    /usr/local/lib/containers/talos-auto-bootstrap/talos-auto-bootstrap
+COPY --from=builder /app/bin/kommodity-autobootstrap-extension \
+    /usr/local/lib/containers/kommodity-autobootstrap/kommodity-autobootstrap-extension
 
 # Copy service definition
-COPY talos-auto-bootstrap.yaml \
-    /usr/local/etc/containers/talos-auto-bootstrap.yaml
+COPY kommodity-autobootstrap.yaml \
+    /usr/local/etc/containers/kommodity-autobootstrap.yaml
 
 # Copy extension manifest
 COPY manifest.yaml /manifest.yaml
