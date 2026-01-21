@@ -20,7 +20,7 @@ $(LINTER):
 
 # Build the binary for Linux
 build: $(SOURCES) ## Build the application.
-	go build $(GO_FLAGS) -o bin/talos-auto-bootstrap cmd/talos-auto-bootstrap/main.go
+	go build $(GO_FLAGS) -o bin/talos-auto-bootstrap ./cmd/talos-auto-bootstrap/main.go
 ifneq ($(UPX_FLAGS),)
 	upx $(UPX_FLAGS) bin/talos-auto-bootstrap
 endif
