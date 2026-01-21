@@ -25,7 +25,7 @@ var Version = "dev"
 
 const (
 	// MachineSocket is the path to the Talos machined Unix socket.
-	MachineSocket = "/run/machined/machined.sock"
+	MachineSocket = "/system/run/machined/machine.sock"
 )
 
 func main() {
