@@ -152,7 +152,7 @@ func getDefaultGateway() (netip.Addr, error) {
 	if err != nil {
 		return netip.Addr{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	scanner := bufio.NewScanner(file)
 	// Skip header line
@@ -169,7 +169,9 @@ func getDefaultGateway() (netip.Addr, error) {
 		if fields[1] == "00000000" {
 			// Gateway is in hex, little-endian
 			var gw uint32
-			fmt.Sscanf(fields[2], "%x", &gw)
+			if _, err := fmt.Sscanf(fields[2], "%x", &gw); err != nil {
+				continue
+			}
 			// Convert from little-endian
 			gwBytes := make([]byte, 4)
 			binary.LittleEndian.PutUint32(gwBytes, gw)
