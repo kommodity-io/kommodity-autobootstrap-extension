@@ -7,7 +7,7 @@ container:
       type: bind
       options:
         - bind
-        - ro
+        - rw
 configuration: true
 depends:
   - service: machined
