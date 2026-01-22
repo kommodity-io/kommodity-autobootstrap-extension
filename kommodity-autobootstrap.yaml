@@ -1,6 +1,7 @@
 name: kommodity-autobootstrap
 container:
   entrypoint: ./kommodity-autobootstrap-extension
+configuration: true
 depends:
   - service: machined
   - path: /system/run/machined/machine.sock
