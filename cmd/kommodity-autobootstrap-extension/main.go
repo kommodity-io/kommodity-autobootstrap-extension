@@ -2,16 +2,13 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/kommodity-io/kommodity/pkg/logging"
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
-	configres "github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -27,7 +24,14 @@ var Version = "dev"
 
 const (
 	// MachineSocket is the path to the Talos machined Unix socket.
+	// We connect to machined directly for gRPC calls (Bootstrap, EtcdMemberList).
+	// Note: COSI access via machined is denied for extensions, so we use
+	// filesystem-based checks instead of COSI queries.
 	MachineSocket = "/system/run/machined/machine.sock"
+
+	// EtcdSecretsPath is the path to etcd secrets directory.
+	// This directory only exists on control plane nodes.
+	EtcdSecretsPath = "/system/secrets/etcd"
 )
 
 func main() {
@@ -54,23 +58,21 @@ func main() {
 }
 
 func run(ctx context.Context, cfg *config.Config) error {
+	// Check if this is a control plane node using filesystem
+	// (etcd secrets directory only exists on control plane nodes)
+	if !isControlPlane() {
+		zap.L().Info("worker node detected (no etcd secrets), exiting")
+		return nil
+	}
+
+	zap.L().Info("control plane node detected, starting bootstrap process")
+
 	// Wait for machined socket with retries
 	client, err := waitForMachined(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = client.Close() }()
-
-	// Check if this is a control plane node
-	isCP, err := isControlPlane(ctx, client)
-	if err != nil {
-		return fmt.Errorf("failed to check machine type: %w", err)
-	}
-
-	if !isCP {
-		zap.L().Info("worker node detected, exiting")
-		return nil
-	}
 
 	// Check if cluster is already bootstrapped
 	bootstrapped, err := bootstrap.IsClusterBootstrapped(ctx, client)
@@ -79,7 +81,6 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return nil
 	}
 
-	zap.L().Info("control plane node detected, starting bootstrap process")
 	return runBootstrapLoop(ctx, client, cfg)
 }
 
@@ -108,13 +109,11 @@ func waitForMachined(ctx context.Context) (*talosclient.Client, error) {
 }
 
 // isControlPlane checks if the current node is a control plane node.
-func isControlPlane(ctx context.Context, client *talosclient.Client) (bool, error) {
-	mt, err := safe.StateGet[*configres.MachineType](ctx, client.COSI,
-		configres.NewMachineType().Metadata())
-	if err != nil {
-		return false, err
-	}
-	return mt.MachineType().String() == "controlplane", nil
+// It uses a filesystem-based check: the etcd secrets directory only exists
+// on control plane nodes.
+func isControlPlane() bool {
+	_, err := os.Stat(EtcdSecretsPath)
+	return err == nil
 }
 
 // runBootstrapLoop is the main loop that handles discovery, election, and bootstrap.
@@ -136,8 +135,9 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 			return nil
 		}
 
-		// Get network information from COSI
-		netInfo, err := discovery.GetNetworkInfoFromCOSI(ctx, client.COSI)
+		// Get network information using filesystem/net package
+		// (COSI access is not available to extensions)
+		netInfo, err := discovery.GetNetworkInfo()
 		if err != nil {
 			zap.L().Warn("failed to get network info, retrying", zap.Error(err))
 			time.Sleep(backoff)

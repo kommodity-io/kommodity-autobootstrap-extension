@@ -1,9 +1,14 @@
 package discovery
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
 	"fmt"
+	"net"
 	"net/netip"
+	"os"
+	"strings"
 
 	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/cosi-project/runtime/pkg/state"
@@ -69,6 +74,113 @@ func GetNetworkInfoFromCOSI(ctx context.Context, st state.State) (*NetworkInfo, 
 	}
 
 	return info, nil
+}
+
+// GetNetworkInfo retrieves network configuration using Go's net package.
+// This is used instead of COSI when COSI access is not available.
+func GetNetworkInfo() (*NetworkInfo, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get network interfaces: %w", err)
+	}
+
+	var info *NetworkInfo
+
+	for _, iface := range interfaces {
+		// Skip loopback and down interfaces
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+
+			ip := ipNet.IP.To4()
+			if ip == nil {
+				continue // Skip IPv6
+			}
+
+			// Skip loopback and link-local
+			if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+				continue
+			}
+
+			netipAddr, ok := netip.AddrFromSlice(ip)
+			if !ok {
+				continue
+			}
+
+			ones, _ := ipNet.Mask.Size()
+			prefix := netip.PrefixFrom(netipAddr, ones)
+
+			info = &NetworkInfo{
+				LocalIP:  netipAddr,
+				CIDR:     prefix.Masked(),
+				LinkName: iface.Name,
+			}
+			break
+		}
+		if info != nil {
+			break
+		}
+	}
+
+	if info == nil {
+		return nil, fmt.Errorf("no suitable network address found")
+	}
+
+	// Get default gateway from /proc/net/route
+	gateway, err := getDefaultGateway()
+	if err == nil {
+		info.Gateway = gateway
+	}
+
+	return info, nil
+}
+
+// getDefaultGateway reads the default gateway from /proc/net/route.
+func getDefaultGateway() (netip.Addr, error) {
+	file, err := os.Open("/proc/net/route")
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	// Skip header line
+	scanner.Scan()
+
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 3 {
+			continue
+		}
+
+		// Destination is field 1, Gateway is field 2
+		// Default route has destination 00000000
+		if fields[1] == "00000000" {
+			// Gateway is in hex, little-endian
+			var gw uint32
+			fmt.Sscanf(fields[2], "%x", &gw)
+			// Convert from little-endian
+			gwBytes := make([]byte, 4)
+			binary.LittleEndian.PutUint32(gwBytes, gw)
+			addr, ok := netip.AddrFromSlice(gwBytes)
+			if ok {
+				return addr, nil
+			}
+		}
+	}
+
+	return netip.Addr{}, fmt.Errorf("no default gateway found")
 }
 
 // GenerateIPsInCIDR generates all host IP addresses within a CIDR range,

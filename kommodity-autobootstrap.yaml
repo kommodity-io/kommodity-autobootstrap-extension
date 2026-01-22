@@ -2,12 +2,42 @@ name: kommodity-autobootstrap
 container:
   entrypoint: ./kommodity-autobootstrap-extension
   mounts:
+    # Machined socket for gRPC calls (Bootstrap, EtcdMemberList)
+    # Needs rw because Unix sockets require write access to send data
     - source: /system/run/machined
       destination: /system/run/machined
       type: bind
       options:
         - bind
         - rw
+    # System secrets to check if control plane (etcd secrets only exist on CP)
+    - source: /system/secrets
+      destination: /system/secrets
+      type: bind
+      options:
+        - bind
+        - ro
+    # /proc for reading boot time and network routes
+    - source: /proc
+      destination: /proc
+      type: bind
+      options:
+        - bind
+        - ro
+    # /etc for hostname
+    - source: /etc
+      destination: /etc
+      type: bind
+      options:
+        - bind
+        - ro
+    # /sys for network interface info
+    - source: /sys
+      destination: /sys
+      type: bind
+      options:
+        - bind
+        - ro
 configuration: true
 depends:
   - service: machined
