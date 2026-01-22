@@ -1,6 +1,13 @@
 name: kommodity-autobootstrap
 container:
   entrypoint: ./kommodity-autobootstrap-extension
+  mounts:
+    - source: /system/run/machined
+      destination: /system/run/machined
+      type: bind
+      options:
+        - bind
+        - ro
 configuration: true
 depends:
   - service: machined
