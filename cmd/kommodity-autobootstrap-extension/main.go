@@ -13,6 +13,8 @@ import (
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
 	configres "github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/kommodity/talos-auto-bootstrap/internal/config"
 	"github.com/kommodity/talos-auto-bootstrap/pkg/bootstrap"
@@ -86,13 +88,16 @@ func waitForMachined(ctx context.Context) (*talosclient.Client, error) {
 	for {
 		client, err := talosclient.New(ctx,
 			talosclient.WithUnixSocket(MachineSocket),
+			talosclient.WithGRPCDialOptions(
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+			),
 		)
 		if err == nil {
 			zap.L().Info("connected to machined")
 			return client, nil
 		}
 
-		zap.L().Info("waiting for machined socket", zap.String("path", MachineSocket))
+		zap.L().Info("waiting for machined socket", zap.String("path", MachineSocket), zap.Error(err))
 
 		select {
 		case <-ctx.Done():
