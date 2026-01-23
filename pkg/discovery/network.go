@@ -147,8 +147,13 @@ func GetNetworkInfo() (*NetworkInfo, error) {
 }
 
 // getDefaultGateway reads the default gateway from /proc/net/route.
+// Uses /host/proc when running in container to avoid conflicting with container's /proc.
 func getDefaultGateway() (netip.Addr, error) {
-	file, err := os.Open("/proc/net/route")
+	// Try /host/proc first (container environment), then /proc (native)
+	file, err := os.Open("/host/proc/net/route")
+	if err != nil {
+		file, err = os.Open("/proc/net/route")
+	}
 	if err != nil {
 		return netip.Addr{}, err
 	}

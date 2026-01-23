@@ -18,8 +18,9 @@ container:
         - bind
         - ro
     # /proc for reading boot time and network routes
+    # Mount to /host/proc to avoid conflicting with container's own /proc
     - source: /proc
-      destination: /proc
+      destination: /host/proc
       type: bind
       options:
         - bind
@@ -27,13 +28,6 @@ container:
     # /etc for hostname
     - source: /etc
       destination: /etc
-      type: bind
-      options:
-        - bind
-        - ro
-    # /sys for network interface info
-    - source: /sys
-      destination: /sys
       type: bind
       options:
         - bind
