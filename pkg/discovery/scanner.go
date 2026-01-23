@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/netip"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -148,28 +150,30 @@ func probeTalosNode(ctx context.Context, ip netip.Addr, timeout time.Duration) (
 }
 
 // GetLocalNodeInfo retrieves information about the local node.
+// Uses gRPC Version() call and filesystem instead of COSI.
 func GetLocalNodeInfo(ctx context.Context, client *talosclient.Client,
 	localIP netip.Addr) (*DiscoveredNode, error) {
 
-	version, err := client.Version(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get version: %w", err)
-	}
-
 	var hostname string
-	if len(version.Messages) > 0 && version.Messages[0].Metadata != nil {
+	var bootTime time.Time
+
+	// Try to get hostname from Version() gRPC call
+	version, err := client.Version(ctx)
+	if err == nil && len(version.Messages) > 0 && version.Messages[0].Metadata != nil {
 		hostname = version.Messages[0].Metadata.Hostname
 	}
 
-	// Get boot time from MachineStatus
-	bootTime := time.Now() // fallback
-	machineStatus, err := safe.StateGet[*runtimeres.MachineStatus](ctx, client.COSI,
-		resource.NewMetadata(runtimeres.NamespaceName, runtimeres.MachineStatusType,
-			runtimeres.MachineStatusID, resource.VersionUndefined))
-	if err == nil {
-		// MachineStatus gives us uptime info indirectly
-		_ = machineStatus // use if we can extract boot time
+	// Fallback: get hostname from /etc/hostname or os.Hostname()
+	if hostname == "" {
+		if data, err := os.ReadFile("/etc/hostname"); err == nil {
+			hostname = strings.TrimSpace(string(data))
+		} else if h, err := os.Hostname(); err == nil {
+			hostname = h
+		}
 	}
+
+	// Get boot time from /proc/stat
+	bootTime = getBootTime()
 
 	return &DiscoveredNode{
 		IP:             localIP,
@@ -177,4 +181,23 @@ func GetLocalNodeInfo(ctx context.Context, client *talosclient.Client,
 		CreationTime:   bootTime,
 		Hostname:       hostname,
 	}, nil
+}
+
+// getBootTime reads the system boot time from /proc/stat.
+func getBootTime() time.Time {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return time.Now()
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "btime ") {
+			var btime int64
+			if _, err := fmt.Sscanf(line, "btime %d", &btime); err == nil {
+				return time.Unix(btime, 0)
+			}
+		}
+	}
+
+	return time.Now()
 }
