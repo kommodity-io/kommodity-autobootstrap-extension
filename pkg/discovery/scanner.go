@@ -184,8 +184,13 @@ func GetLocalNodeInfo(ctx context.Context, client *talosclient.Client,
 }
 
 // getBootTime reads the system boot time from /proc/stat.
+// Uses /host/proc when running in container to avoid conflicting with container's /proc.
 func getBootTime() time.Time {
-	data, err := os.ReadFile("/proc/stat")
+	// Try /host/proc first (container environment), then /proc (native)
+	data, err := os.ReadFile("/host/proc/stat")
+	if err != nil {
+		data, err = os.ReadFile("/proc/stat")
+	}
 	if err != nil {
 		return time.Now()
 	}
