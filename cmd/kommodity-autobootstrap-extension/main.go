@@ -30,7 +30,8 @@ const (
 	// We connect to apid via TLS with an admin certificate for gRPC calls
 	// (Bootstrap, EtcdMemberList). Direct machined socket access is denied
 	// for extensions due to RBAC, so we use apid with generated admin credentials.
-	ApidEndpoint = "localhost:50000"
+	// Use IP address to avoid DNS resolution (container may not have DNS configured).
+	ApidEndpoint = "127.0.0.1:50000"
 
 	// EtcdSecretsPath is the path to etcd secrets directory.
 	// This directory only exists on control plane nodes.
