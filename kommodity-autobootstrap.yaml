@@ -33,13 +33,14 @@ container:
       options:
         - rbind
         - ro
-    # /var/mnt for creating temporary mount points under /var/mnt/autobootstrap
+    # /run for creating temporary mount points under /run/autobootstrap
     # Used to mount STATE partition and read machine config
-    - source: /var/mnt
-      destination: /var/mnt
+    # /run is a writable tmpfs in Talos Linux
+    - source: /run
+      destination: /run
       type: bind
       options:
-        - bind
+        - rbind
         - rw
 # configuration: true means the extension waits for ExtensionServiceConfig
 # which can provide optional environment variables

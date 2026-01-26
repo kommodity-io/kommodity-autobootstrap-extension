@@ -40,8 +40,8 @@ func parseConfigForCA(configData []byte) (*MachineConfigCA, error) {
 
 const (
 	// MountBasePath is the base directory for temporary mount operations.
-	// This aligns with the /var/mnt volume mounted in the container configuration.
-	MountBasePath = "/var/mnt/autobootstrap"
+	// Uses /run which is a writable tmpfs in Talos Linux.
+	MountBasePath = "/run/autobootstrap"
 )
 
 // ReadCAFromStatePartition reads the machine CA from the STATE partition.
