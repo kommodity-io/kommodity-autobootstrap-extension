@@ -16,43 +16,25 @@ import (
 const (
 	// AdminRole is the Talos API admin role that grants full access.
 	AdminRole = "os:admin"
+
+	// CertValidityDuration is the validity period for generated client certificates.
+	// Short-lived certificates reduce the window of exposure if compromised.
+	CertValidityDuration = 24 * time.Hour
 )
 
 // GenerateTLSConfig creates a TLS configuration with a client certificate
 // that has the os:admin role, using the provided CA certificate and key.
 func GenerateTLSConfig(caCertB64, caKeyB64 string) (*tls.Config, error) {
-	// Decode base64 CA certificate
-	caCertPEM, err := base64.StdEncoding.DecodeString(caCertB64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode CA certificate: %w", err)
-	}
-
-	// Decode base64 CA key
-	caKeyPEM, err := base64.StdEncoding.DecodeString(caKeyB64)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode CA key: %w", err)
-	}
-
 	// Parse CA certificate
-	caCertBlock, _ := pem.Decode(caCertPEM)
-	if caCertBlock == nil {
-		return nil, fmt.Errorf("failed to parse CA certificate PEM")
-	}
-
-	caCert, err := x509.ParseCertificate(caCertBlock.Bytes)
+	caCert, err := parseCACertificate(caCertB64)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse CA certificate: %w", err)
+		return nil, fmt.Errorf("CA certificate: %w", err)
 	}
 
 	// Parse CA private key
-	caKeyBlock, _ := pem.Decode(caKeyPEM)
-	if caKeyBlock == nil {
-		return nil, fmt.Errorf("failed to parse CA key PEM")
-	}
-
-	caKey, err := parsePrivateKey(caKeyBlock)
+	caKey, err := parseCAPrivateKey(caKeyB64)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse CA private key: %w", err)
+		return nil, fmt.Errorf("CA private key: %w", err)
 	}
 
 	// Generate a new key pair for the client certificate
@@ -74,7 +56,7 @@ func GenerateTLSConfig(caCertB64, caKeyB64 string) (*tls.Config, error) {
 			CommonName:   "autobootstrap-extension",
 		},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour), // Short-lived cert
+		NotAfter:              time.Now().Add(CertValidityDuration),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
@@ -107,6 +89,66 @@ func GenerateTLSConfig(caCertB64, caKeyB64 string) (*tls.Config, error) {
 		RootCAs:      caCertPool,
 		MinVersion:   tls.VersionTLS12,
 	}, nil
+}
+
+// parseCACertificate decodes and parses a base64-encoded PEM CA certificate.
+func parseCACertificate(caCertB64 string) (*x509.Certificate, error) {
+	if caCertB64 == "" {
+		return nil, fmt.Errorf("certificate data is empty")
+	}
+
+	caCertPEM, err := base64.StdEncoding.DecodeString(caCertB64)
+	if err != nil {
+		return nil, fmt.Errorf("base64 decode failed: %w", err)
+	}
+
+	if len(caCertPEM) == 0 {
+		return nil, fmt.Errorf("decoded certificate data is empty")
+	}
+
+	block, _ := pem.Decode(caCertPEM)
+	if block == nil {
+		return nil, fmt.Errorf("PEM decode failed: no valid PEM block found")
+	}
+
+	if block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("unexpected PEM block type %q, expected CERTIFICATE", block.Type)
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("x509 parse failed: %w", err)
+	}
+
+	return cert, nil
+}
+
+// parseCAPrivateKey decodes and parses a base64-encoded PEM CA private key.
+func parseCAPrivateKey(caKeyB64 string) (any, error) {
+	if caKeyB64 == "" {
+		return nil, fmt.Errorf("key data is empty")
+	}
+
+	caKeyPEM, err := base64.StdEncoding.DecodeString(caKeyB64)
+	if err != nil {
+		return nil, fmt.Errorf("base64 decode failed: %w", err)
+	}
+
+	if len(caKeyPEM) == 0 {
+		return nil, fmt.Errorf("decoded key data is empty")
+	}
+
+	block, _ := pem.Decode(caKeyPEM)
+	if block == nil {
+		return nil, fmt.Errorf("PEM decode failed: no valid PEM block found")
+	}
+
+	key, err := parsePrivateKey(block)
+	if err != nil {
+		return nil, fmt.Errorf("parse failed: %w", err)
+	}
+
+	return key, nil
 }
 
 // parsePrivateKey parses a PEM block into a private key.

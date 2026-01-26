@@ -10,11 +10,22 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const (
+	// MountBasePath is the base directory for temporary mount operations.
+	// This aligns with the /var/mnt volume mounted in the container configuration.
+	MountBasePath = "/var/mnt/autobootstrap"
+)
+
 // ReadCAFromStatePartition reads the machine CA from the STATE partition.
 // It mounts the partition temporarily, reads the config, and extracts the CA.
 func ReadCAFromStatePartition() (*MachineConfigCA, error) {
-	// Create a temporary mount point
-	mountPoint, err := os.MkdirTemp("", "state-partition-")
+	// Ensure the base mount directory exists
+	if err := os.MkdirAll(MountBasePath, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create mount base directory: %w", err)
+	}
+
+	// Create a temporary mount point under our dedicated directory
+	mountPoint, err := os.MkdirTemp(MountBasePath, "state-partition-")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp mount point: %w", err)
 	}

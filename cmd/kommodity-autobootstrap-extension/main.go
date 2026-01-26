@@ -26,11 +26,11 @@ import (
 var Version = "dev"
 
 const (
-	// ApidEndpoint is the local apid endpoint.
+	// ApidEndpoint is the local apid endpoint with port.
 	// We connect to apid via TLS with an admin certificate for gRPC calls
 	// (Bootstrap, EtcdMemberList). Direct machined socket access is denied
 	// for extensions due to RBAC, so we use apid with generated admin credentials.
-	ApidEndpoint = "localhost"
+	ApidEndpoint = "localhost:50000"
 
 	// EtcdSecretsPath is the path to etcd secrets directory.
 	// This directory only exists on control plane nodes.
