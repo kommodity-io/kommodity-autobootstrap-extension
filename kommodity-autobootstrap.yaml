@@ -31,7 +31,8 @@ container:
       options:
         - bind
         - ro
-    # /var/mnt for creating mount point for STATE partition
+    # /var/mnt for creating temporary mount points under /var/mnt/autobootstrap
+    # Used to mount STATE partition and read machine config
     - source: /var/mnt
       destination: /var/mnt
       type: bind

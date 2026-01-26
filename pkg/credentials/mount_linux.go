@@ -8,7 +8,35 @@ import (
 	"path/filepath"
 
 	"golang.org/x/sys/unix"
+	"gopkg.in/yaml.v3"
 )
+
+// machineConfig represents the relevant parts of the Talos machine config.
+type machineConfig struct {
+	Machine struct {
+		CA struct {
+			Crt string `yaml:"crt"`
+			Key string `yaml:"key"`
+		} `yaml:"ca"`
+	} `yaml:"machine"`
+}
+
+// parseConfigForCA parses machine config YAML and extracts the CA.
+func parseConfigForCA(configData []byte) (*MachineConfigCA, error) {
+	var config machineConfig
+	if err := yaml.Unmarshal(configData, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	if config.Machine.CA.Crt == "" || config.Machine.CA.Key == "" {
+		return nil, fmt.Errorf("machine.ca.crt or machine.ca.key not found in config")
+	}
+
+	return &MachineConfigCA{
+		Crt: config.Machine.CA.Crt,
+		Key: config.Machine.CA.Key,
+	}, nil
+}
 
 const (
 	// MountBasePath is the base directory for temporary mount operations.
@@ -29,13 +57,13 @@ func ReadCAFromStatePartition() (*MachineConfigCA, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp mount point: %w", err)
 	}
-	defer os.RemoveAll(mountPoint)
+	defer func() { _ = os.RemoveAll(mountPoint) }()
 
 	// Mount the STATE partition
 	if err := mountPartition(StatePartitionPath, mountPoint); err != nil {
 		return nil, fmt.Errorf("failed to mount STATE partition: %w", err)
 	}
-	defer unmountPartition(mountPoint)
+	defer func() { _ = unmountPartition(mountPoint) }()
 
 	// Read the config file
 	configPath := filepath.Join(mountPoint, ConfigFileName)
