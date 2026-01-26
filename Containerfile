@@ -18,26 +18,26 @@ COPY . .
 # Build the binary using Makefile
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 make build UPX_FLAGS= VERSION=${VERSION}
 
-# Create mount point directories (needed for bind mounts in scratch container)
-RUN mkdir -p /app/mountpoints/var/mnt \
-             /app/mountpoints/system/secrets \
-             /app/mountpoints/dev/disk/by-partlabel \
-             /app/mountpoints/host/proc \
-             /app/mountpoints/etc
+# Create bind mount point directories under /app/rootfs (mirrors final /rootfs structure).
+# These empty directories are required because Talos extension containers use a read-only
+# root filesystem, so bind mount destinations must exist in the image.
+# See kommodity-autobootstrap.yaml for mount configuration.
+RUN mkdir -p \
+    /app/rootfs/var/mnt \
+    /app/rootfs/system/secrets \
+    /app/rootfs/dev/disk/by-partlabel \
+    /app/rootfs/host/proc \
+    /app/rootfs/etc
 
 # Extension stage - Talos system extension format
 FROM scratch
 
-# Copy binary to Talos extension location (under /rootfs/)
+# Copy binary to Talos extension location
 COPY --from=builder /app/bin/kommodity-autobootstrap-extension \
     /rootfs/usr/local/lib/containers/kommodity-autobootstrap/kommodity-autobootstrap-extension
 
-# Copy mount point directories (bind mount destinations must exist in container)
-COPY --from=builder /app/mountpoints/var /rootfs/var
-COPY --from=builder /app/mountpoints/system /rootfs/system
-COPY --from=builder /app/mountpoints/dev /rootfs/dev
-COPY --from=builder /app/mountpoints/host /rootfs/host
-COPY --from=builder /app/mountpoints/etc /rootfs/etc
+# Copy bind mount point directories (must exist for read-only container filesystem)
+COPY --from=builder /app/rootfs/ /rootfs/
 
 # Copy service definition (under /rootfs/)
 COPY kommodity-autobootstrap.yaml \
