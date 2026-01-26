@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -77,7 +78,8 @@ func run(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to get network info: %w", err)
 	}
-	apidEndpoint := netInfo.LocalIP.String() + ":" + ApidPort
+
+	apidEndpoint := net.JoinHostPort(netInfo.LocalIP.String(), ApidPort)
 	zap.L().Info("resolved apid endpoint", zap.String("endpoint", apidEndpoint))
 
 	// Read machine CA from the STATE partition
