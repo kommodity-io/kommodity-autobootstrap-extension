@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -26,12 +27,11 @@ import (
 var Version = "dev"
 
 const (
-	// ApidEndpoint is the local apid endpoint with port.
+	// ApidPort is the port where apid listens.
 	// We connect to apid via TLS with an admin certificate for gRPC calls
 	// (Bootstrap, EtcdMemberList). Direct machined socket access is denied
 	// for extensions due to RBAC, so we use apid with generated admin credentials.
-	// Use IP address to avoid DNS resolution (container may not have DNS configured).
-	ApidEndpoint = "127.0.0.1:50000"
+	ApidPort = "50000"
 
 	// EtcdSecretsPath is the path to etcd secrets directory.
 	// This directory only exists on control plane nodes.
@@ -71,6 +71,17 @@ func run(ctx context.Context, cfg *config.Config) error {
 
 	zap.L().Info("control plane node detected, starting bootstrap process")
 
+	// Get network info first to determine local IP for apid connection.
+	// apid's TLS certificate is issued for the node's IP, so we must connect
+	// using the actual IP (not localhost) for certificate validation to pass.
+	netInfo, err := discovery.GetNetworkInfo()
+	if err != nil {
+		return fmt.Errorf("failed to get network info: %w", err)
+	}
+
+	apidEndpoint := net.JoinHostPort(netInfo.LocalIP.String(), ApidPort)
+	zap.L().Info("resolved apid endpoint", zap.String("endpoint", apidEndpoint))
+
 	// Read machine CA from the STATE partition
 	zap.L().Info("reading machine CA from STATE partition")
 	machineCA, err := creds.ReadCAFromStatePartition()
@@ -86,7 +97,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// Wait for apid with TLS authentication
-	client, err := waitForApid(ctx, tlsConfig)
+	client, err := waitForApid(ctx, tlsConfig, apidEndpoint)
 	if err != nil {
 		return fmt.Errorf("failed to connect to apid: %w", err)
 	}
@@ -103,10 +114,10 @@ func run(ctx context.Context, cfg *config.Config) error {
 }
 
 // waitForApid waits for apid to become available and connects with TLS credentials.
-func waitForApid(ctx context.Context, tlsConfig *tls.Config) (*talosclient.Client, error) {
+func waitForApid(ctx context.Context, tlsConfig *tls.Config, endpoint string) (*talosclient.Client, error) {
 	for {
 		client, err := talosclient.New(ctx,
-			talosclient.WithEndpoints(ApidEndpoint),
+			talosclient.WithEndpoints(endpoint),
 			talosclient.WithTLSConfig(tlsConfig),
 			talosclient.WithGRPCDialOptions(
 				grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
@@ -117,7 +128,7 @@ func waitForApid(ctx context.Context, tlsConfig *tls.Config) (*talosclient.Clien
 			return client, nil
 		}
 
-		zap.L().Info("waiting for apid", zap.String("endpoint", ApidEndpoint), zap.Error(err))
+		zap.L().Info("waiting for apid", zap.String("endpoint", endpoint), zap.Error(err))
 
 		select {
 		case <-ctx.Done():
