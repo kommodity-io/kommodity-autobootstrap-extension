@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,10 +13,11 @@ import (
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 
 	"github.com/kommodity/talos-auto-bootstrap/internal/config"
 	"github.com/kommodity/talos-auto-bootstrap/pkg/bootstrap"
+	creds "github.com/kommodity/talos-auto-bootstrap/pkg/credentials"
 	"github.com/kommodity/talos-auto-bootstrap/pkg/discovery"
 	"github.com/kommodity/talos-auto-bootstrap/pkg/election"
 )
@@ -23,11 +26,11 @@ import (
 var Version = "dev"
 
 const (
-	// MachineSocket is the path to the Talos machined Unix socket.
-	// We connect to machined directly for gRPC calls (Bootstrap, EtcdMemberList).
-	// Note: COSI access via machined is denied for extensions, so we use
-	// filesystem-based checks instead of COSI queries.
-	MachineSocket = "/system/run/machined/machine.sock"
+	// ApidEndpoint is the local apid endpoint with port.
+	// We connect to apid via TLS with an admin certificate for gRPC calls
+	// (Bootstrap, EtcdMemberList). Direct machined socket access is denied
+	// for extensions due to RBAC, so we use apid with generated admin credentials.
+	ApidEndpoint = "localhost:50000"
 
 	// EtcdSecretsPath is the path to etcd secrets directory.
 	// This directory only exists on control plane nodes.
@@ -67,10 +70,24 @@ func run(ctx context.Context, cfg *config.Config) error {
 
 	zap.L().Info("control plane node detected, starting bootstrap process")
 
-	// Wait for machined socket with retries
-	client, err := waitForMachined(ctx)
+	// Read machine CA from the STATE partition
+	zap.L().Info("reading machine CA from STATE partition")
+	machineCA, err := creds.ReadCAFromStatePartition()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read machine CA: %w", err)
+	}
+
+	// Generate TLS config with os:admin credentials from the machine CA
+	zap.L().Info("generating admin TLS credentials from machine CA")
+	tlsConfig, err := creds.GenerateTLSConfig(machineCA.Crt, machineCA.Key)
+	if err != nil {
+		return fmt.Errorf("failed to generate TLS config: %w", err)
+	}
+
+	// Wait for apid with TLS authentication
+	client, err := waitForApid(ctx, tlsConfig)
+	if err != nil {
+		return fmt.Errorf("failed to connect to apid: %w", err)
 	}
 	defer func() { _ = client.Close() }()
 
@@ -84,21 +101,22 @@ func run(ctx context.Context, cfg *config.Config) error {
 	return runBootstrapLoop(ctx, client, cfg)
 }
 
-// waitForMachined waits for the machined socket to become available.
-func waitForMachined(ctx context.Context) (*talosclient.Client, error) {
+// waitForApid waits for apid to become available and connects with TLS credentials.
+func waitForApid(ctx context.Context, tlsConfig *tls.Config) (*talosclient.Client, error) {
 	for {
 		client, err := talosclient.New(ctx,
-			talosclient.WithUnixSocket(MachineSocket),
+			talosclient.WithEndpoints(ApidEndpoint),
+			talosclient.WithTLSConfig(tlsConfig),
 			talosclient.WithGRPCDialOptions(
-				grpc.WithTransportCredentials(insecure.NewCredentials()),
+				grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 			),
 		)
 		if err == nil {
-			zap.L().Info("connected to machined")
+			zap.L().Info("connected to apid with admin credentials")
 			return client, nil
 		}
 
-		zap.L().Info("waiting for machined socket", zap.String("path", MachineSocket), zap.Error(err))
+		zap.L().Info("waiting for apid", zap.String("endpoint", ApidEndpoint), zap.Error(err))
 
 		select {
 		case <-ctx.Done():

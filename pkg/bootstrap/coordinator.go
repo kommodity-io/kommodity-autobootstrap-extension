@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	machineapi "github.com/siderolabs/talos/pkg/machinery/api/machine"
@@ -49,7 +50,7 @@ func (c *Coordinator) SafeBootstrap(ctx context.Context) error {
 		RecoverEtcd: false,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("bootstrap failed: %w", err)
 	}
 
 	// Wait for etcd to become ready

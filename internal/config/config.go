@@ -8,9 +8,6 @@ import (
 
 // Config holds runtime configuration for the auto-bootstrap service.
 type Config struct {
-	// LogLevel sets the logging verbosity: debug, info, warn, error
-	LogLevel string `envconfig:"TALOS_AUTO_BOOTSTRAP_LOG_LEVEL" default:"info"`
-
 	// ScanInterval is the time between network discovery scans
 	ScanInterval time.Duration `envconfig:"TALOS_AUTO_BOOTSTRAP_SCAN_INTERVAL" default:"30s"`
 

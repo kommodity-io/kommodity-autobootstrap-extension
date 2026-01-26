@@ -2,14 +2,6 @@ name: kommodity-autobootstrap
 container:
   entrypoint: ./kommodity-autobootstrap-extension
   mounts:
-    # Machined socket for gRPC calls (Bootstrap, EtcdMemberList)
-    # Needs rw because Unix sockets require write access to send data
-    - source: /system/run/machined
-      destination: /system/run/machined
-      type: bind
-      options:
-        - bind
-        - rw
     # System secrets to check if control plane (etcd secrets only exist on CP)
     - source: /system/secrets
       destination: /system/secrets
@@ -32,10 +24,26 @@ container:
       options:
         - bind
         - ro
+    # Block devices for mounting STATE partition to read machine config
+    - source: /dev/disk/by-partlabel
+      destination: /dev/disk/by-partlabel
+      type: bind
+      options:
+        - bind
+        - ro
+    # /var/mnt for creating temporary mount points under /var/mnt/autobootstrap
+    # Used to mount STATE partition and read machine config
+    - source: /var/mnt
+      destination: /var/mnt
+      type: bind
+      options:
+        - bind
+        - rw
+# configuration: true means the extension waits for ExtensionServiceConfig
+# which can provide optional environment variables
 configuration: true
 depends:
-  - service: machined
-  - path: /system/run/machined/machine.sock
+  - service: apid
   - network:
       - addresses
       - connectivity
