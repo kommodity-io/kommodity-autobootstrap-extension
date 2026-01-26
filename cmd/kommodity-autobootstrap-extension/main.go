@@ -81,13 +81,13 @@ func run(ctx context.Context, cfg *config.Config) error {
 	zap.L().Info("generating admin TLS credentials from machine CA")
 	tlsConfig, err := creds.GenerateTLSConfig(machineCA.Crt, machineCA.Key)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to generate TLS config: %w", err)
 	}
 
 	// Wait for apid with TLS authentication
 	client, err := waitForApid(ctx, tlsConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to connect to apid: %w", err)
 	}
 	defer func() { _ = client.Close() }()
 
