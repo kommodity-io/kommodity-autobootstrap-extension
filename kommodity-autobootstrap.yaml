@@ -24,12 +24,14 @@ container:
       options:
         - bind
         - ro
-    # Block devices for mounting STATE partition to read machine config
-    - source: /dev/disk/by-partlabel
-      destination: /dev/disk/by-partlabel
+    # /dev for accessing block devices to mount STATE partition
+    # Must mount full /dev because /dev/disk/by-partlabel/STATE is a symlink to /dev/sdX
+    # Use rbind to recursively bind nested mounts within /dev
+    - source: /dev
+      destination: /dev
       type: bind
       options:
-        - bind
+        - rbind
         - ro
     # /var/mnt for creating temporary mount points under /var/mnt/autobootstrap
     # Used to mount STATE partition and read machine config
