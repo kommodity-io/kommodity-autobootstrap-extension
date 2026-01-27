@@ -9,8 +9,12 @@ import (
 )
 
 // IsClusterBootstrapped checks if the cluster has already been bootstrapped
-// by checking for etcd members.
+// by checking for etcd members. Uses a short timeout to avoid blocking
+// when etcd is not yet running.
 func IsClusterBootstrapped(ctx context.Context, client *talosclient.Client) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
 	members, err := client.EtcdMemberList(ctx, &machineapi.EtcdMemberListRequest{})
 	if err != nil {
 		// etcd not running = not bootstrapped
