@@ -59,9 +59,14 @@ func ReadCAFromStatePartition() (*MachineConfigCA, error) {
 	}
 	defer func() { _ = os.RemoveAll(mountPoint) }()
 
-	// Mount the STATE partition
-	if err := mountPartition(StatePartitionPath, mountPoint); err != nil {
-		return nil, fmt.Errorf("failed to mount STATE partition: %w", err)
+	// Mount the STATE partition.
+	// Try the raw partition first (unencrypted), then fall back to the
+	// device mapper path used when KMS disk encryption is enabled.
+	if rawErr := mountPartition(StatePartitionPath, mountPoint); rawErr != nil {
+		if encErr := mountPartition(StatePartitionEncryptedPath, mountPoint); encErr != nil {
+			return nil, fmt.Errorf("failed to mount STATE partition (tried %s: %v, and %s: %v)",
+				StatePartitionPath, rawErr, StatePartitionEncryptedPath, encErr)
+		}
 	}
 	defer func() { _ = unmountPartition(mountPoint) }()
 
