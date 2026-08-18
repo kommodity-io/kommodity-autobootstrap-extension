@@ -74,7 +74,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// Get network info first to determine local IP for apid connection.
 	// apid's TLS certificate is issued for the node's IP, so we must connect
 	// using the actual IP (not localhost) for certificate validation to pass.
-	netInfo, err := discovery.GetNetworkInfo()
+	netInfo, err := discovery.GetNetworkInfo(cfg.ScanCIDR)
 	if err != nil {
 		return fmt.Errorf("failed to get network info: %w", err)
 	}
@@ -167,9 +167,9 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 
 		// Get network information using filesystem/net package
 		// (COSI access is not available to extensions)
-		netInfo, err := discovery.GetNetworkInfo()
+		netInfo, err := discovery.GetNetworkInfo(cfg.ScanCIDR)
 		if err != nil {
-			zap.L().Warn("failed to get network info, retrying", zap.Error(err))
+			zap.L().Error("failed to get network info, retrying", zap.Error(err))
 			time.Sleep(backoff)
 			continue
 		}
@@ -183,7 +183,9 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 		peers, err := discovery.ScanCIDRForTalosNodes(ctx, netInfo.CIDR,
 			netInfo.LocalIP, cfg.ScanTimeout, cfg.ScanConcurrency)
 		if err != nil {
-			zap.L().Warn("network scan failed, retrying", zap.Error(err))
+			// A scan that cannot run is operator-actionable, not transient:
+			// proceeding would elect a leader from a candidate set of one.
+			zap.L().Error("network scan failed, not electing a leader", zap.Error(err))
 			time.Sleep(backoff)
 			continue
 		}

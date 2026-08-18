@@ -96,7 +96,13 @@ This means the extension works without any external secrets or pre-configured cr
 
 Discovers peer Talos nodes via CIDR network scanning:
 - Reads network configuration from `/proc/net/route` and network interfaces
-- Scans the local CIDR range for other Talos nodes on port 50000
+- Determines the network to scan from the **routing table**, not the interface
+  address prefix. On platforms that assign a `/32` node address the interface
+  prefix contains no other hosts, while a route still describes the real network
+- Scans that CIDR range for other Talos nodes on port 50000
+- Refuses to continue if the scan range has no usable host range, rather than
+  electing a leader from a candidate set of one. Set
+  `TALOS_AUTO_BOOTSTRAP_SCAN_CIDR` when auto-detection cannot find the network
 - Uses insecure TLS for discovery (required for unknown nodes)
 - Identifies control plane vs worker nodes via machine type
 - Retrieves boot time for leader election
@@ -107,7 +113,7 @@ Implements a deterministic leader election algorithm:
 
 1. Collect all control plane nodes (including self)
 2. Wait until quorum is reached (configurable)
-3. Sort by boot time (oldest first)
+3. Sort by boot time (oldest first), read from each node's kernel boot time
 4. Tie-break by IP address (lowest wins)
 5. First node in sorted list becomes leader
 
@@ -142,7 +148,8 @@ The extension is configured via `ExtensionServiceConfig` in the Talos machine co
 | `TALOS_AUTO_BOOTSTRAP_PRE_BOOTSTRAP_DELAY` | Leader wait time before executing bootstrap | `10s` |
 | `TALOS_AUTO_BOOTSTRAP_MAX_BACKOFF` | Maximum retry backoff duration | `2m` |
 | `TALOS_AUTO_BOOTSTRAP_SCAN_TIMEOUT` | Timeout for probing each node during discovery | `2s` |
-| `TALOS_AUTO_BOOTSTRAP_SCAN_CONCURRENCY` | Maximum concurrent node probes | `50` |
+| `TALOS_AUTO_BOOTSTRAP_SCAN_CONCURRENCY` | Maximum concurrent node probes | `256` |
+| `TALOS_AUTO_BOOTSTRAP_SCAN_CIDR` | Network to scan for peers. Overrides auto-detection; required if the node address is a `/32` and no route describes the node network | *auto-detected* |
 
 ## Deployment
 
@@ -193,6 +200,9 @@ environment:
   - LOG_LEVEL=info
   - TALOS_AUTO_BOOTSTRAP_QUORUM_NODES=3
   - TALOS_AUTO_BOOTSTRAP_PRE_BOOTSTRAP_DELAY=20s
+  # Only needed if the node address is a /32 and auto-detection cannot
+  # determine the node network.
+  - TALOS_AUTO_BOOTSTRAP_SCAN_CIDR=10.0.0.0/16
 ```
 
 This ensures:
@@ -264,7 +274,8 @@ The extension can be tested in a local Talos cluster using `talosctl cluster cre
 ## Limitations
 
 - Only runs on **control plane nodes** (exits gracefully on workers)
-- Requires all control plane nodes to be on the **same network segment/CIDR**
+- Requires all control plane nodes to be reachable within one scanned CIDR
+  (auto-detected from the routing table, or set via `TALOS_AUTO_BOOTSTRAP_SCAN_CIDR`)
 - Does not support **multi-cluster coordination**
 - Does not integrate with external service discovery (Consul, etc.)
 - **TLS verification is disabled** during peer discovery (required for unknown nodes)
