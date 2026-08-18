@@ -50,9 +50,15 @@ type DiscoveredNode struct {
 // clientTLS carries the client certificate used to authenticate to peers. apid
 // requires client-cert auth, so a probe without one connects and is then
 // rejected on the RPC, which is indistinguishable from an empty address.
+//
+// The scan stops as soon as enough control plane peers are found to satisfy
+// wantControlPlanes. Authenticated probes to empty addresses cost the full
+// timeout, so sweeping a whole /16 takes minutes; peers sit at the low
+// addresses and are found in the first moments, and waiting for the remaining
+// timeouts would withhold them for no benefit. Pass 0 to sweep the range.
 func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 	localIP netip.Addr, timeout time.Duration, concurrency int,
-	clientTLS *tls.Config) ([]DiscoveredNode, error) {
+	clientTLS *tls.Config, wantControlPlanes int) ([]DiscoveredNode, error) {
 
 	var (
 		nodes   []DiscoveredNode
@@ -80,8 +86,14 @@ func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 		return nil, fmt.Errorf("scan CIDR %s yielded no addresses to probe", cidr)
 	}
 
-	g, ctx := errgroup.WithContext(ctx)
+	// Cancelling this context stops the remaining probes once we have enough.
+	scanCtx, stop := context.WithCancel(ctx)
+	defer stop()
+
+	g, gctx := errgroup.WithContext(scanCtx)
 	g.SetLimit(concurrency)
+
+	var found int
 
 	for _, ip := range ips {
 		// Skip local IP
@@ -89,23 +101,43 @@ func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 			continue
 		}
 
+		if gctx.Err() != nil {
+			break
+		}
+
 		ip := ip // capture for goroutine
 		g.Go(func() error {
-			node, err := probeTalosNode(ctx, ip, timeout, clientTLS)
+			node, err := probeTalosNode(gctx, ip, timeout, clientTLS)
 			if err != nil {
 				return nil // Not a Talos node or unreachable, skip silently
 			}
 
 			nodesMu.Lock()
+			defer nodesMu.Unlock()
+
 			nodes = append(nodes, *node)
-			nodesMu.Unlock()
+
+			if node.IsControlPlane {
+				found++
+				// The local node counts toward quorum, so one fewer peer is
+				// needed than the configured total. Note this only shortens the
+				// sweep once enough peers answer: with QuorumNodes=1, or on a
+				// range whose peers are absent, the full range is still probed.
+				if wantControlPlanes > 0 && found >= wantControlPlanes-1 {
+					stop()
+				}
+			}
+
 			return nil
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
+	// Errors here are cancellation from the early return, not probe failures:
+	// probes never return one.
+	_ = g.Wait()
+
+	nodesMu.Lock()
+	defer nodesMu.Unlock()
 
 	return nodes, nil
 }

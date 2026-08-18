@@ -182,7 +182,8 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 
 		// Scan CIDR for peer Talos nodes
 		peers, err := discovery.ScanCIDRForTalosNodes(ctx, netInfo.CIDR,
-			netInfo.LocalIP, cfg.ScanTimeout, cfg.ScanConcurrency, tlsConfig)
+			netInfo.LocalIP, cfg.ScanTimeout, cfg.ScanConcurrency, tlsConfig,
+			cfg.QuorumNodes)
 		if err != nil {
 			// A scan that cannot run is operator-actionable, not transient:
 			// proceeding would elect a leader from a candidate set of one.

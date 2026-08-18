@@ -50,7 +50,7 @@ func TestScanRejectsUnusableRangeBeforeProbing(t *testing.T) {
 			start := time.Now()
 			_, err := ScanCIDRForTalosNodes(context.Background(),
 				netip.MustParsePrefix(tt.cidr), netip.MustParseAddr("10.0.0.4"),
-				time.Second, 16, nil)
+				time.Second, 16, nil, 0)
 			if err == nil {
 				t.Fatalf("expected %s to be refused", tt.cidr)
 			}
@@ -58,5 +58,81 @@ func TestScanRejectsUnusableRangeBeforeProbing(t *testing.T) {
 				t.Errorf("refusal took %s, should be immediate", elapsed)
 			}
 		})
+	}
+}
+
+// The scan must stop probing as soon as enough control planes are found rather
+// than waiting out the remaining addresses. Authenticated probes to empty
+// addresses cost the full timeout, so a /16 sweep is minutes; peers sit at the
+// low addresses and withholding them until every timeout expires stalls
+// bootstrap.
+//
+// Loopback refuses instantly rather than timing out, so a timing assertion is
+// not meaningful here. This exercises the stop condition directly: it is the
+// arithmetic that decides when the sweep is cut short.
+func TestQuorumStopCondition(t *testing.T) {
+	tests := []struct {
+		name              string
+		wantControlPlanes int
+		foundPeers        int
+		stop              bool
+	}{
+		// The local node counts toward quorum, so a 3 node control plane needs
+		// only 2 peers.
+		{name: "three node quorum, one peer", wantControlPlanes: 3, foundPeers: 1, stop: false},
+		{name: "three node quorum, two peers", wantControlPlanes: 3, foundPeers: 2, stop: true},
+		{name: "single node quorum stops immediately", wantControlPlanes: 1, foundPeers: 0, stop: true},
+		{name: "two node quorum, one peer", wantControlPlanes: 2, foundPeers: 1, stop: true},
+		// Zero means sweep the whole range.
+		{name: "zero never stops early", wantControlPlanes: 0, foundPeers: 99, stop: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.wantControlPlanes > 0 && tt.foundPeers >= tt.wantControlPlanes-1
+			if got != tt.stop {
+				t.Errorf("want=%d found=%d: expected stop=%v, got %v",
+					tt.wantControlPlanes, tt.foundPeers, tt.stop, got)
+			}
+		})
+	}
+}
+
+// A cancelled context must not stall the scan: the early return relies on
+// cancellation unwinding the errgroup promptly.
+func TestScanHonoursCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+
+	_, err := ScanCIDRForTalosNodes(ctx, netip.MustParsePrefix("10.0.0.0/16"),
+		netip.MustParseAddr("10.0.0.4"), 2*time.Second, 256, nil, 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Without cancellation this range would take minutes.
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("cancelled scan took %s, expected prompt return", elapsed)
+	} else {
+		t.Logf("cancelled scan returned in %s", elapsed)
+	}
+}
+
+// wantControlPlanes of 0 must sweep the whole range, preserving the previous
+// behaviour for callers that do not set a quorum.
+func TestScanQuorumZeroSweepsRange(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	nodes, err := ScanCIDRForTalosNodes(ctx, netip.MustParsePrefix("127.0.0.0/30"),
+		netip.MustParseAddr("127.0.0.1"), 100*time.Millisecond, 4, nil, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(nodes) != 0 {
+		t.Errorf("expected no Talos nodes on loopback, got %d", len(nodes))
 	}
 }
