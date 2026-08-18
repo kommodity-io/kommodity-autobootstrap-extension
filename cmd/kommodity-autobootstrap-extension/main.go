@@ -37,6 +37,17 @@ const (
 	// EtcdSecretsPath is the path to etcd secrets directory.
 	// This directory only exists on control plane nodes.
 	EtcdSecretsPath = "/system/secrets/etcd"
+
+	// QuorumWarnAfter is how long quorum may go unmet before the wait is
+	// reported at Warn. Long enough that an ordinary staggered boot stays quiet,
+	// short enough to notice a stuck cluster.
+	//
+	// Measured in elapsed time rather than scan rounds: a round costs a full
+	// sweep of the range when quorum is unmet, because the scan only returns
+	// early once enough control planes answer. On a large range that is minutes
+	// per round, so a round count would delay the warning by however long the
+	// sweep happens to take.
+	QuorumWarnAfter = 3 * time.Minute
 )
 
 func main() {
@@ -165,11 +176,33 @@ func logRetryFailure(msg string, err error) {
 	zap.L().Error(msg, zap.Error(err))
 }
 
+// trackUnmetQuorum reports how long quorum has gone unmet and whether that is
+// now long enough to warn. unmetSince is the zero time when quorum was last met.
+//
+// Reaching quorum resets it rather than latching: a cluster whose peers appear
+// late is the normal slow-boot path and should look normal once it resolves, and
+// a node that dips in and out of quorum gets the full grace period again rather
+// than warning on every subsequent dip.
+func trackUnmetQuorum(unmetSince, now time.Time, quorumMet bool) (time.Time, bool) {
+	if quorumMet {
+		return time.Time{}, false
+	}
+
+	if unmetSince.IsZero() {
+		unmetSince = now
+	}
+
+	return unmetSince, now.Sub(unmetSince) >= QuorumWarnAfter
+}
+
 // runBootstrapLoop is the main loop that handles discovery, election, and bootstrap.
 func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config,
 	tlsConfig *tls.Config) error {
 	backoff := 5 * time.Second
 	coordinator := bootstrap.NewCoordinator(client, cfg.PreBootstrapDelay)
+
+	// When quorum first went unmet, zero while it is being met.
+	var unmetQuorumSince time.Time
 
 	for {
 		select {
@@ -241,11 +274,41 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 		// Check if quorum is reached
 		allNodes := append(peers, *localNode)
 		if !election.QuorumReached(allNodes, cfg.QuorumNodes) {
-			zap.L().Info("quorum not reached, waiting",
-				zap.Int("found", len(peers)+1),
-				zap.Int("required", cfg.QuorumNodes))
+			var warn bool
+
+			unmetQuorumSince, warn = trackUnmetQuorum(unmetQuorumSince, time.Now(), false)
+
+			// Waiting for peers is legitimate and the node keeps waiting, but
+			// waiting silently forever is indistinguishable from a hang. Say so
+			// once the wait is long enough to be worth an operator's attention.
+			if warn {
+				zap.L().Warn("quorum still not reached, continuing to wait",
+					zap.Int("found", len(peers)+1),
+					zap.Int("required", cfg.QuorumNodes),
+					zap.Duration("waiting", time.Since(unmetQuorumSince)))
+			} else {
+				zap.L().Info("quorum not reached, waiting",
+					zap.Int("found", len(peers)+1),
+					zap.Int("required", cfg.QuorumNodes))
+			}
+
 			time.Sleep(cfg.ScanInterval)
+
 			continue
+		}
+
+		unmetQuorumSince, _ = trackUnmetQuorum(unmetQuorumSince, time.Now(), true)
+
+		// QuorumNodes=1 lets a node that has not yet seen its peers elect
+		// itself, so two nodes can bootstrap separately. Discovering other
+		// control planes proves the cluster is not single node. The operator's
+		// value is honoured: they may be staging a bring-up, and this condition
+		// is timing-dependent, so refusing would make the same configuration
+		// succeed or fail from one boot to the next.
+		if cfg.QuorumNodes == 1 && controlPlanePeers > 0 {
+			zap.L().Warn("QUORUM_NODES=1 with other control planes discovered; "+
+				"nodes may bootstrap separately, set it to the control plane count",
+				zap.Int("controlplane_peers", controlPlanePeers))
 		}
 
 		// Perform leader election
