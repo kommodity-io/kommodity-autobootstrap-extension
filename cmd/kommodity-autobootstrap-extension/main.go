@@ -195,6 +195,21 @@ func trackUnmetQuorum(unmetSince, now time.Time, quorumMet bool) (time.Time, boo
 	return unmetSince, now.Sub(unmetSince) >= QuorumWarnAfter
 }
 
+// quorumCount reports the node count that quorum is judged on: control plane
+// peers plus this node. Quorum ignores workers, so a diagnostic that counted
+// them would contradict itself, reporting more nodes found than required while
+// the node keeps waiting.
+//
+// The local node is always a control plane here: run() returns before the loop
+// unless isControlPlane(), and GetLocalNodeInfo sets IsControlPlane on that
+// basis.
+//
+// Separated from the log call to be testable, not to be reused. Inline, the
+// count was unreachable from a test and shipped counting workers.
+func quorumCount(controlPlanePeers int) int {
+	return controlPlanePeers + 1
+}
+
 // runBootstrapLoop is the main loop that handles discovery, election, and bootstrap.
 func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config,
 	tlsConfig *tls.Config) error {
@@ -283,12 +298,12 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 			// once the wait is long enough to be worth an operator's attention.
 			if warn {
 				zap.L().Warn("quorum still not reached, continuing to wait",
-					zap.Int("found", len(peers)+1),
+					zap.Int("found", quorumCount(controlPlanePeers)),
 					zap.Int("required", cfg.QuorumNodes),
 					zap.Duration("waiting", time.Since(unmetQuorumSince)))
 			} else {
 				zap.L().Info("quorum not reached, waiting",
-					zap.Int("found", len(peers)+1),
+					zap.Int("found", quorumCount(controlPlanePeers)),
 					zap.Int("required", cfg.QuorumNodes))
 			}
 

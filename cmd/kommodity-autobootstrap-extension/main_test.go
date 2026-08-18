@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/kommodity/talos-auto-bootstrap/pkg/discovery"
+	"github.com/kommodity/talos-auto-bootstrap/pkg/election"
 )
 
 // A node configures its network after this loop starts, so the conditions that
@@ -162,5 +163,58 @@ func TestQuorumWarnDoesNotLatch(t *testing.T) {
 	_, warn = trackUnmetQuorum(since, dipStart.Add(QuorumWarnAfter-time.Second), false)
 	if warn {
 		t.Error("the dip must get the full grace period again")
+	}
+}
+
+// The reported count must match what QuorumReached judges, which is control
+// planes only. Hardware measured found:2 required:3 on 1 control plane and 1
+// worker, where the governing number was 1: the diagnostic misstated the
+// quantity it exists to explain.
+func TestQuorumCountExcludesWorkers(t *testing.T) {
+	tests := []struct {
+		name              string
+		controlPlanePeers int
+		want              int
+	}{
+		{"alone", 0, 1},
+		{"one control plane peer", 1, 2},
+		{"quorum of three", 2, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := quorumCount(tt.controlPlanePeers); got != tt.want {
+				t.Errorf("quorumCount(%d) = %d, want %d",
+					tt.controlPlanePeers, got, tt.want)
+			}
+		})
+	}
+}
+
+// The reported count and the quorum decision must agree, or the log explains a
+// wait with a number that did not cause it. Drives the real QuorumReached
+// rather than restating its rule.
+func TestQuorumCountAgreesWithQuorumReached(t *testing.T) {
+	nodes := []discovery.DiscoveredNode{
+		{IsControlPlane: true},  // local
+		{IsControlPlane: false}, // worker peer
+	}
+	controlPlanePeers := 0
+
+	for _, n := range nodes[1:] {
+		if n.IsControlPlane {
+			controlPlanePeers++
+		}
+	}
+
+	const required = 3
+
+	if election.QuorumReached(nodes, required) {
+		t.Fatal("quorum should not be reached with one control plane")
+	}
+
+	if got := quorumCount(controlPlanePeers); got >= required {
+		t.Errorf("found:%d required:%d reports quorum met while it is not",
+			got, required)
 	}
 }
