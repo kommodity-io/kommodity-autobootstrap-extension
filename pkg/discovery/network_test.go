@@ -115,8 +115,8 @@ func TestGenerateIPsInCIDR_Degenerate(t *testing.T) {
 		cidr string
 		want int
 	}{
-		// The regression case: a /32 node address must not silently produce
-		// an empty scan, which is what split the control plane.
+		// A /32 has no host range, so it must yield nothing rather than
+		// silently producing an empty scan that looks like an empty network.
 		{name: "slash32 node address", cidr: "10.0.0.4/32", want: 0},
 		{name: "slash31 point to point", cidr: "10.0.0.0/31", want: 0},
 		// These two must return immediately rather than allocating; a /0
@@ -156,10 +156,10 @@ eth0	00000000	01E016AC	0003	0	0	0	00000000	0	0	0
 eth0	00E016AC	00000000	0001	0	0	0	00F0FFFF	0	0	0
 `
 
-// slash32RouteFixture is the shape that caused the split brain, captured from a
-// node with a /32 address. Note the 10.0.0.0/16 route has a gateway: this
-// platform routes the whole network via 10.0.0.1, and the only gateway-less
-// route is the gateway's own /32.
+// slash32RouteFixture is a node with a /32 address whose network is reachable
+// only through a gateway. The 10.0.0.0/16 route has gateway 10.0.0.1, and the
+// only gateway-less route is the gateway's own /32, so the node network is
+// described solely by a route that has a gateway.
 const slash32RouteFixture = `Iface	Destination	Gateway 	Flags	RefCnt	Use	Metric	Mask		MTU	Window	IRTT
 eth0	00000000	0100000A	0003	0	0	1024	00000000	0	0	0
 eth0	0000000A	0100000A	0003	0	0	1024	0000FFFF	0	0	0
@@ -229,9 +229,8 @@ eth0	0000000A	00000000	0001	0	0	0	00FF00FF	0	0	0
 		wantOK  bool
 	}{
 		{
-			// The regression case: the /16 route here has a gateway, so
-			// requiring a gateway-less route found nothing and the node fell
-			// back to its /32.
+			// The network route has a gateway and is still the one that
+			// describes the node network.
 			name: "slash32 address finds the real network", routes: slash32RouteFixture,
 			iface: "eth0", localIP: "10.0.0.4", want: "10.0.0.0/16", wantOK: true,
 		},

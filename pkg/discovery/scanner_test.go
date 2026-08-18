@@ -61,15 +61,11 @@ func TestScanRejectsUnusableRangeBeforeProbing(t *testing.T) {
 	}
 }
 
-// The scan must stop probing as soon as enough control planes are found rather
-// than waiting out the remaining addresses. Authenticated probes to empty
-// addresses cost the full timeout, so a /16 sweep is minutes; peers sit at the
-// low addresses and withholding them until every timeout expires stalls
-// bootstrap.
-//
-// Loopback refuses instantly rather than timing out, so a timing assertion is
-// not meaningful here. This exercises the stop condition directly: it is the
-// arithmetic that decides when the sweep is cut short.
+// The scan stops probing as soon as enough control planes are found rather than
+// waiting out the remaining addresses. Authenticated probes to empty addresses
+// cost the full timeout, so a /16 sweep takes minutes, and peers sit at the low
+// addresses. This covers the arithmetic that decides when the sweep is cut
+// short.
 func TestQuorumStopCondition(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -120,8 +116,7 @@ func TestScanHonoursCancellation(t *testing.T) {
 	}
 }
 
-// wantControlPlanes of 0 must sweep the whole range, preserving the previous
-// behaviour for callers that do not set a quorum.
+// wantControlPlanes of 0 means no quorum target, so the whole range is swept.
 func TestScanQuorumZeroSweepsRange(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

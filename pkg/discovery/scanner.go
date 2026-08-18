@@ -14,6 +14,7 @@ import (
 	"github.com/cosi-project/runtime/pkg/safe"
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
 	configres "github.com/siderolabs/talos/pkg/machinery/resources/config"
+	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -120,9 +121,8 @@ func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 			if node.IsControlPlane {
 				found++
 				// The local node counts toward quorum, so one fewer peer is
-				// needed than the configured total. Note this only shortens the
-				// sweep once enough peers answer: with QuorumNodes=1, or on a
-				// range whose peers are absent, the full range is still probed.
+				// needed than the configured total. With no quorum target, or
+				// where peers never answer, the full range is probed.
 				if wantControlPlanes > 0 && found >= wantControlPlanes-1 {
 					stop()
 				}
@@ -196,8 +196,21 @@ func probeTalosNode(ctx context.Context, ip netip.Addr, timeout time.Duration,
 		hostname = version.Messages[0].Metadata.Hostname
 	}
 
+	// apid does not always populate hostname in the response metadata, which
+	// leaves a discovered peer nameless in the election logs. The local node
+	// falls back to /etc/hostname; for a peer, ask the node itself. Non-fatal:
+	// the election compares IPs, so a missing hostname only costs readability.
+	if hostname == "" {
+		hostnameStatus, err := safe.StateGet[*network.HostnameStatus](nodeCtx, client.COSI,
+			resource.NewMetadata(network.NamespaceName, network.HostnameStatusType,
+				network.HostnameID, resource.VersionUndefined))
+		if err == nil {
+			hostname = hostnameStatus.TypedSpec().Hostname
+		}
+	}
+
 	// SystemStat.BootTime is the peer's boot time, comparable to the local
-	// node's getBootTime(). Version.Built was used before, but that is the image
+	// node's getBootTime(). Version.Built is not a substitute: it is the image
 	// build date and is identical on every node running the same Talos release.
 	//
 	// This probe dials without a client certificate, so the call may be denied.
