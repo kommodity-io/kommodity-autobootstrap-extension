@@ -27,7 +27,12 @@ type Config struct {
 	ScanTimeout time.Duration `envconfig:"TALOS_AUTO_BOOTSTRAP_SCAN_TIMEOUT" default:"2s"`
 
 	// ScanConcurrency is the maximum number of concurrent node probes
-	ScanConcurrency int `envconfig:"TALOS_AUTO_BOOTSTRAP_SCAN_CONCURRENCY" default:"50"`
+	ScanConcurrency int `envconfig:"TALOS_AUTO_BOOTSTRAP_SCAN_CONCURRENCY" default:"256"`
+
+	// ScanCIDR overrides the auto-detected network to scan for peers.
+	// Required where the node address is a /32 and no route
+	// describes the node network.
+	ScanCIDR string `envconfig:"TALOS_AUTO_BOOTSTRAP_SCAN_CIDR"`
 }
 
 // Load reads configuration from environment variables.

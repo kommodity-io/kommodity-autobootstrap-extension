@@ -14,15 +14,22 @@ import (
 	"github.com/cosi-project/runtime/pkg/safe"
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
 	configres "github.com/siderolabs/talos/pkg/machinery/resources/config"
-	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const (
 	// TalosAPIPort is the default port for Talos API.
 	TalosAPIPort = 50000
+
+	// minScanPrefixBits is the widest network to scan. A /16 is 65534 probes.
+	minScanPrefixBits = 16
+
+	// maxScanPrefixBits is the narrowest network with a usable host range.
+	// A /31 or /32 contains no other hosts to discover.
+	maxScanPrefixBits = 30
 )
 
 // DiscoveredNode represents a Talos node found during network scanning.
@@ -47,7 +54,26 @@ func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 		nodesMu sync.Mutex
 	)
 
+	// A /31 or /32 target means the CIDR came from a point-to-point or
+	// single-host interface address. Scanning it finds no peers, so every node
+	// would elect itself leader and bootstrap a separate etcd cluster. Refuse:
+	// a failed bootstrap retries, a split one does not.
+	if cidr.Bits() > maxScanPrefixBits {
+		return nil, fmt.Errorf("scan CIDR %s has no usable host range; "+
+			"set TALOS_AUTO_BOOTSTRAP_SCAN_CIDR to the node network", cidr)
+	}
+
+	if cidr.Bits() < minScanPrefixBits {
+		return nil, fmt.Errorf("scan CIDR %s is too large to scan; "+
+			"set TALOS_AUTO_BOOTSTRAP_SCAN_CIDR to a /16 or narrower", cidr)
+	}
+
 	ips := GenerateIPsInCIDR(cidr)
+	// Never proceed on an empty scan: it is indistinguishable from having
+	// scanned the network and found no peers.
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("scan CIDR %s yielded no addresses to probe", cidr)
+	}
 
 	g, ctx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
@@ -121,24 +147,18 @@ func probeTalosNode(ctx context.Context, ip netip.Addr, timeout time.Duration) (
 		hostname = version.Messages[0].Metadata.Hostname
 	}
 
-	// Get boot time from MachineStatus resource
+	// SystemStat.BootTime is the peer's boot time, comparable to the local
+	// node's getBootTime(). Version.Built was used before, but that is the image
+	// build date and is identical on every node running the same Talos release.
+	//
+	// This probe dials without a client certificate, so the call may be denied.
+	// Keep it non-fatal: dropping a peer here would leave the node believing it
+	// is alone, which is what the scan guards above exist to prevent.
 	bootTime := time.Now()
 
-	machineStatus, err := safe.StateGet[*runtimeres.MachineStatus](nodeCtx, client.COSI,
-		resource.NewMetadata(runtimeres.NamespaceName, runtimeres.MachineStatusType,
-			runtimeres.MachineStatusID, resource.VersionUndefined))
-	if err == nil && machineStatus.TypedSpec().Stage != runtimeres.MachineStageUnknown {
-		// Use version info if available
-		if len(version.Messages) > 0 && version.Messages[0].Version != nil {
-			// Parse built time as a proxy for consistent ordering
-			builtStr := version.Messages[0].Version.Built
-			if builtStr != "" {
-				parsed, err := time.Parse(time.RFC3339, builtStr)
-				if err == nil {
-					bootTime = parsed
-				}
-			}
-		}
+	if stat, err := client.MachineClient.SystemStat(nodeCtx, &emptypb.Empty{}); err == nil &&
+		len(stat.Messages) > 0 && stat.Messages[0].BootTime > 0 {
+		bootTime = time.Unix(int64(stat.Messages[0].BootTime), 0)
 	}
 
 	return &DiscoveredNode{
