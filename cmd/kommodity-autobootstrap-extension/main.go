@@ -192,7 +192,19 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 			continue
 		}
 
-		zap.L().Info("peer discovery complete", zap.Int("peers_found", len(peers)))
+		controlPlanePeers := 0
+
+		for _, peer := range peers {
+			if peer.IsControlPlane {
+				controlPlanePeers++
+			}
+		}
+
+		// peers_found counts every Talos node that answered, workers included.
+		// Only control planes are candidates for quorum and election.
+		zap.L().Info("peer discovery complete",
+			zap.Int("peers_found", len(peers)),
+			zap.Int("controlplane_peers", controlPlanePeers))
 		for _, peer := range peers {
 			zap.L().Debug("discovered peer",
 				zap.String("ip", peer.IP.String()),

@@ -102,7 +102,9 @@ Discovers peer Talos nodes via CIDR network scanning:
 - Scans that CIDR range for other Talos nodes on port 50000
 - Refuses to continue if the scan range has no usable host range, rather than
   electing a leader from a candidate set of one. Set
-  `TALOS_AUTO_BOOTSTRAP_SCAN_CIDR` when auto-detection cannot find the network
+  `TALOS_AUTO_BOOTSTRAP_SCAN_CIDR` when auto-detection cannot find the network.
+  Ranges from `/16` to `/30` are scanned; a `/31` or `/32` has no peers to find,
+  and anything wider than a `/16` is too many probes to be useful
 - Uses insecure TLS for discovery (required for unknown nodes)
 - Identifies control plane vs worker nodes via machine type
 - Retrieves boot time for leader election
