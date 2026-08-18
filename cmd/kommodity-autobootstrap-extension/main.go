@@ -110,7 +110,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return nil
 	}
 
-	return runBootstrapLoop(ctx, client, cfg)
+	return runBootstrapLoop(ctx, client, cfg, tlsConfig)
 }
 
 // waitForApid waits for apid to become available and connects with TLS credentials.
@@ -147,7 +147,8 @@ func isControlPlane() bool {
 }
 
 // runBootstrapLoop is the main loop that handles discovery, election, and bootstrap.
-func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config) error {
+func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config,
+	tlsConfig *tls.Config) error {
 	backoff := 5 * time.Second
 	coordinator := bootstrap.NewCoordinator(client, cfg.PreBootstrapDelay)
 
@@ -181,7 +182,7 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 
 		// Scan CIDR for peer Talos nodes
 		peers, err := discovery.ScanCIDRForTalosNodes(ctx, netInfo.CIDR,
-			netInfo.LocalIP, cfg.ScanTimeout, cfg.ScanConcurrency)
+			netInfo.LocalIP, cfg.ScanTimeout, cfg.ScanConcurrency, tlsConfig)
 		if err != nil {
 			// A scan that cannot run is operator-actionable, not transient:
 			// proceeding would elect a leader from a candidate set of one.
