@@ -143,6 +143,7 @@ The extension is configured via `ExtensionServiceConfig` in the Talos machine co
 | `TALOS_AUTO_BOOTSTRAP_MAX_BACKOFF` | Maximum retry backoff duration | `2m` |
 | `TALOS_AUTO_BOOTSTRAP_SCAN_TIMEOUT` | Timeout for probing each node during discovery | `2s` |
 | `TALOS_AUTO_BOOTSTRAP_SCAN_CONCURRENCY` | Maximum concurrent node probes | `50` |
+| `TALOS_AUTO_BOOTSTRAP_SCAN_CIDR` | Override the auto-detected scan CIDR for peer discovery (IPv4 only). Use on multi-interface hosts where auto-detection picks the wrong subnet (e.g. Azure Accelerated Networking). Empty means auto-detect. | `` |
 
 ## Deployment
 
@@ -193,6 +194,7 @@ environment:
   - LOG_LEVEL=info
   - TALOS_AUTO_BOOTSTRAP_QUORUM_NODES=3
   - TALOS_AUTO_BOOTSTRAP_PRE_BOOTSTRAP_DELAY=20s
+  - TALOS_AUTO_BOOTSTRAP_SCAN_CIDR=10.0.0.0/24
 ```
 
 This ensures:

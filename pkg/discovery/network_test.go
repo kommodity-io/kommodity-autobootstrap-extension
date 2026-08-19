@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -103,6 +104,108 @@ func TestAddToIP(t *testing.T) {
 			result := addToIP(ip, tt.offset)
 			if result.String() != tt.expected {
 				t.Errorf("expected %s, got %s", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestParseScanCIDR(t *testing.T) {
+	tests := []struct {
+		name        string
+		override    string
+		expected    string
+		wantError   bool
+		errContains string
+	}{
+		{
+			name:     "valid IPv4 CIDR",
+			override: "10.200.48.0/24",
+			expected: "10.200.48.0/24",
+		},
+		{
+			name:     "unmasked host bits are masked",
+			override: "10.200.48.5/24",
+			expected: "10.200.48.0/24",
+		},
+		{
+			name:     "whitespace is trimmed",
+			override: "  10.200.48.0/24  ",
+			expected: "10.200.48.0/24",
+		},
+		{
+			name:     "slash30 accepted at narrow boundary",
+			override: "10.200.48.0/30",
+			expected: "10.200.48.0/30",
+		},
+		{
+			name:     "slash16 accepted at wide boundary",
+			override: "10.0.0.0/16",
+			expected: "10.0.0.0/16",
+		},
+		{
+			name:        "slash31 rejected as too narrow",
+			override:    "10.200.48.0/31",
+			wantError:   true,
+			errContains: "must be between",
+		},
+		{
+			name:        "slash32 rejected as too narrow",
+			override:    "10.200.48.4/32",
+			wantError:   true,
+			errContains: "must be between",
+		},
+		{
+			name:        "slash15 rejected as too wide",
+			override:    "10.0.0.0/15",
+			wantError:   true,
+			errContains: "must be between",
+		},
+		{
+			name:        "slash0 rejected as too wide",
+			override:    "0.0.0.0/0",
+			wantError:   true,
+			errContains: "must be between",
+		},
+		{
+			name:        "IPv6 CIDR rejected",
+			override:    "fd00::/64",
+			wantError:   true,
+			errContains: "must be IPv4",
+		},
+		{
+			name:      "malformed value rejected",
+			override:  "not-a-cidr",
+			wantError: true,
+		},
+		{
+			name:      "invalid prefix length rejected",
+			override:  "10.200.48.0/33",
+			wantError: true,
+		},
+		{
+			name:      "empty string rejected",
+			override:  "",
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParseScanCIDR(tt.override)
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("expected error to contain %q, got %q", tt.errContains, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.String() != tt.expected {
+				t.Errorf("expected %s, got %s", tt.expected, result.String())
 			}
 		})
 	}

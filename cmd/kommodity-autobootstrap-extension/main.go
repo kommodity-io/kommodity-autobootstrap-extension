@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -110,7 +111,16 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return nil
 	}
 
-	return runBootstrapLoop(ctx, client, cfg)
+	var scanCIDROverride netip.Prefix
+	if cfg.ScanCIDR != "" {
+		override, err := discovery.ParseScanCIDR(cfg.ScanCIDR)
+		if err != nil {
+			return err
+		}
+		scanCIDROverride = override
+	}
+
+	return runBootstrapLoop(ctx, client, cfg, scanCIDROverride)
 }
 
 // waitForApid waits for apid to become available and connects with TLS credentials.
@@ -147,7 +157,7 @@ func isControlPlane() bool {
 }
 
 // runBootstrapLoop is the main loop that handles discovery, election, and bootstrap.
-func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config) error {
+func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config, scanCIDROverride netip.Prefix) error {
 	backoff := 5 * time.Second
 	coordinator := bootstrap.NewCoordinator(client, cfg.PreBootstrapDelay)
 
@@ -172,6 +182,13 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 			zap.L().Warn("failed to get network info, retrying", zap.Error(err))
 			time.Sleep(backoff)
 			continue
+		}
+
+		if scanCIDROverride.IsValid() {
+			zap.L().Info("applying scan CIDR override",
+				zap.String("override", scanCIDROverride.String()),
+				zap.String("auto_detected", netInfo.CIDR.String()))
+			netInfo.CIDR = scanCIDROverride
 		}
 
 		zap.L().Info("network discovered",
