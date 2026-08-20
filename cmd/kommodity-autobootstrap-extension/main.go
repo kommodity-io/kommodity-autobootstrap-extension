@@ -120,7 +120,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		scanCIDROverride = override
 	}
 
-	return runBootstrapLoop(ctx, client, cfg, scanCIDROverride)
+	return runBootstrapLoop(ctx, client, cfg, scanCIDROverride, tlsConfig)
 }
 
 // waitForApid waits for apid to become available and connects with TLS credentials.
@@ -150,14 +150,21 @@ func waitForApid(ctx context.Context, tlsConfig *tls.Config, endpoint string) (*
 
 // isControlPlane checks if the current node is a control plane node.
 // It uses a filesystem-based check: the etcd secrets directory only exists
-// on control plane nodes.
+// on control plane nodes. The directory is created by the etcd controller
+// during boot, which may race with the extension startup. To handle this,
+// it retries for up to 2 minutes before concluding this is a worker node.
 func isControlPlane() bool {
-	_, err := os.Stat(EtcdSecretsPath)
-	return err == nil
+	for i := 0; i < 24; i++ {
+		if _, err := os.Stat(EtcdSecretsPath); err == nil {
+			return true
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return false
 }
 
 // runBootstrapLoop is the main loop that handles discovery, election, and bootstrap.
-func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config, scanCIDROverride netip.Prefix) error {
+func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config, scanCIDROverride netip.Prefix, tlsConfig *tls.Config) error {
 	backoff := 5 * time.Second
 	coordinator := bootstrap.NewCoordinator(client, cfg.PreBootstrapDelay)
 
@@ -198,7 +205,7 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 
 		// Scan CIDR for peer Talos nodes
 		peers, err := discovery.ScanCIDRForTalosNodes(ctx, netInfo.CIDR,
-			netInfo.LocalIP, cfg.ScanTimeout, cfg.ScanConcurrency)
+			netInfo.LocalIP, cfg.ScanTimeout, cfg.ScanConcurrency, tlsConfig)
 		if err != nil {
 			zap.L().Warn("network scan failed, retrying", zap.Error(err))
 			time.Sleep(backoff)
