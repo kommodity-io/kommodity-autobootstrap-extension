@@ -5,63 +5,33 @@ package credentials
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"golang.org/x/sys/unix"
-	"gopkg.in/yaml.v3"
-)
-
-// machineConfig represents the relevant parts of the Talos machine config.
-type machineConfig struct {
-	Machine struct {
-		CA struct {
-			Crt string `yaml:"crt"`
-			Key string `yaml:"key"`
-		} `yaml:"ca"`
-	} `yaml:"machine"`
-}
-
-// parseConfigForCA parses machine config YAML and extracts the CA.
-func parseConfigForCA(configData []byte) (*MachineConfigCA, error) {
-	var config machineConfig
-	if err := yaml.Unmarshal(configData, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse config: %w", err)
-	}
-
-	if config.Machine.CA.Crt == "" || config.Machine.CA.Key == "" {
-		return nil, fmt.Errorf("machine.ca.crt or machine.ca.key not found in config")
-	}
-
-	return &MachineConfigCA{
-		Crt: config.Machine.CA.Crt,
-		Key: config.Machine.CA.Key,
-	}, nil
-}
-
-const (
-	// MountBasePath is the base directory for temporary mount operations.
-	// Uses /run which is a writable tmpfs in Talos Linux.
-	MountBasePath = "/run/autobootstrap"
 )
 
 // ReadCAFromStatePartition reads the machine CA from the STATE partition.
-// It mounts the partition temporarily, reads the config, and extracts the CA.
+// It tries Talos's own /system/state mount first (no raw block device mount
+// needed), then falls back to mounting the raw block device (with LUKS2
+// fallback) for environments where /system/state isn't available or doesn't
+// contain config.yaml.
 func ReadCAFromStatePartition() (*MachineConfigCA, error) {
-	// Ensure the base mount directory exists
+	// Fast path: Talos mounts the STATE partition at /system/state.
+	// Try reading config.yaml there first — no mount syscalls needed.
+	if ca, err := readConfigFromPath(SystemStateMountPath); err == nil {
+		return ca, nil
+	}
+
+	// Fallback: mount the raw STATE partition under /run/autobootstrap.
 	if err := os.MkdirAll(MountBasePath, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create mount base directory: %w", err)
 	}
 
-	// Create a temporary mount point under our dedicated directory
 	mountPoint, err := os.MkdirTemp(MountBasePath, "state-partition-")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp mount point: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(mountPoint) }()
 
-	// Mount the STATE partition.
-	// Try the raw partition first (unencrypted), then fall back to the
-	// device mapper path used when KMS disk encryption is enabled.
 	if rawErr := mountPartition(StatePartitionPath, mountPoint); rawErr != nil {
 		if encErr := mountPartition(StatePartitionEncryptedPath, mountPoint); encErr != nil {
 			return nil, fmt.Errorf("failed to mount STATE partition (tried %s: %v, and %s: %v)",
@@ -70,15 +40,17 @@ func ReadCAFromStatePartition() (*MachineConfigCA, error) {
 	}
 	defer func() { _ = unmountPartition(mountPoint) }()
 
-	// Read the config file
-	configPath := filepath.Join(mountPoint, ConfigFileName)
-	configData, err := os.ReadFile(configPath)
+	ca, err := readConfigFromPath(mountPoint)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, fmt.Errorf("failed to read machine CA: %w", err)
 	}
-
-	return parseConfigForCA(configData)
+	return ca, nil
 }
+
+const (
+	// MountBasePath is the base directory for temporary mount operations.
+	MountBasePath = "/run/autobootstrap"
+)
 
 // mountPartition mounts a partition at the specified mount point.
 func mountPartition(device, mountPoint string) error {

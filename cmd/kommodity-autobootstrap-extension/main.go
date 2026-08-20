@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -110,7 +111,16 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return nil
 	}
 
-	return runBootstrapLoop(ctx, client, cfg)
+	var scanCIDROverride netip.Prefix
+	if cfg.ScanCIDR != "" {
+		override, err := discovery.ParseScanCIDR(cfg.ScanCIDR)
+		if err != nil {
+			return err
+		}
+		scanCIDROverride = override
+	}
+
+	return runBootstrapLoop(ctx, client, cfg, scanCIDROverride, tlsConfig)
 }
 
 // waitForApid waits for apid to become available and connects with TLS credentials.
@@ -140,16 +150,23 @@ func waitForApid(ctx context.Context, tlsConfig *tls.Config, endpoint string) (*
 
 // isControlPlane checks if the current node is a control plane node.
 // It uses a filesystem-based check: the etcd secrets directory only exists
-// on control plane nodes.
+// on control plane nodes. The directory is created by the etcd controller
+// during boot, which may race with the extension startup. To handle this,
+// it retries for up to 2 minutes before concluding this is a worker node.
 func isControlPlane() bool {
-	_, err := os.Stat(EtcdSecretsPath)
-	return err == nil
+	for i := 0; i < 24; i++ {
+		if _, err := os.Stat(EtcdSecretsPath); err == nil {
+			return true
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return false
 }
 
 // runBootstrapLoop is the main loop that handles discovery, election, and bootstrap.
-func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config) error {
+func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config, scanCIDROverride netip.Prefix, tlsConfig *tls.Config) error {
 	backoff := 5 * time.Second
-	coordinator := bootstrap.NewCoordinator(client, cfg.PreBootstrapDelay)
+	coordinator := bootstrap.NewCoordinator(client, cfg.PreBootstrapDelay, tlsConfig)
 
 	for {
 		select {
@@ -174,6 +191,13 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 			continue
 		}
 
+		if scanCIDROverride.IsValid() {
+			zap.L().Info("applying scan CIDR override",
+				zap.String("override", scanCIDROverride.String()),
+				zap.String("auto_detected", netInfo.CIDR.String()))
+			netInfo.CIDR = scanCIDROverride
+		}
+
 		zap.L().Info("network discovered",
 			zap.String("localIP", netInfo.LocalIP.String()),
 			zap.String("cidr", netInfo.CIDR.String()),
@@ -181,7 +205,7 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 
 		// Scan CIDR for peer Talos nodes
 		peers, err := discovery.ScanCIDRForTalosNodes(ctx, netInfo.CIDR,
-			netInfo.LocalIP, cfg.ScanTimeout, cfg.ScanConcurrency)
+			netInfo.LocalIP, cfg.ScanTimeout, cfg.ScanConcurrency, tlsConfig)
 		if err != nil {
 			zap.L().Warn("network scan failed, retrying", zap.Error(err))
 			time.Sleep(backoff)
@@ -230,7 +254,16 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 
 		// This node is the leader - execute bootstrap
 		zap.L().Info("elected as leader, initiating bootstrap")
-		err = coordinator.SafeBootstrap(ctx)
+
+		// Collect peer IPs for the bootstrap safety check
+		var peerIPs []netip.Addr
+		for _, peer := range peers {
+			if peer.IsControlPlane {
+				peerIPs = append(peerIPs, peer.IP)
+			}
+		}
+
+		err = coordinator.SafeBootstrap(ctx, peerIPs)
 		if err != nil {
 			zap.L().Error("bootstrap failed, retrying", zap.Error(err))
 			time.Sleep(backoff)

@@ -28,6 +28,11 @@ type Config struct {
 
 	// ScanConcurrency is the maximum number of concurrent node probes
 	ScanConcurrency int `envconfig:"TALOS_AUTO_BOOTSTRAP_SCAN_CONCURRENCY" default:"50"`
+
+	// ScanCIDR optionally overrides the auto-detected scan CIDR for peer
+	// discovery (e.g. "10.200.48.0/24"). Empty means auto-detect from the
+	// first suitable interface.
+	ScanCIDR string `envconfig:"TALOS_AUTO_BOOTSTRAP_SCAN_CIDR" default:""`
 }
 
 // Load reads configuration from environment variables.

@@ -19,9 +19,12 @@ type ElectionResult struct {
 // ElectLeader performs deterministic leader election among control plane nodes.
 // The election algorithm:
 // 1. Collect all control plane nodes (local + peers)
-// 2. Sort by boot time (ascending - oldest first)
-// 3. Tie-break by IP address (lowest wins)
-// 4. First node in sorted list is the leader
+// 2. Sort by IP address (lowest wins)
+//
+// CreationTime is intentionally ignored because the local node and peers use
+// different time sources (local: /proc/stat boot time, peers: Talos Version.Built
+// or time.Now() if COSI is unavailable), making cross-node comparison unreliable
+// and causing every node to elect itself as leader.
 func ElectLeader(localNode discovery.DiscoveredNode,
 	peers []discovery.DiscoveredNode) *ElectionResult {
 
@@ -35,14 +38,9 @@ func ElectLeader(localNode discovery.DiscoveredNode,
 		}
 	}
 
-	// Sort by creation time, then by IP for deterministic tie-breaking
+	// Sort by IP address (lowest wins) for deterministic, consistent election
 	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].CreationTime.Equal(candidates[j].CreationTime) {
-			// Tie-break by IP address (lowest wins)
-			return candidates[i].IP.Less(candidates[j].IP)
-		}
-		// Oldest node (earliest creation time) wins
-		return candidates[i].CreationTime.Before(candidates[j].CreationTime)
+		return candidates[i].IP.Less(candidates[j].IP)
 	})
 
 	leader := &candidates[0]

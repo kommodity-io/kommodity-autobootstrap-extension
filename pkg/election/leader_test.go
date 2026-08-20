@@ -8,51 +8,11 @@ import (
 	"github.com/kommodity/talos-auto-bootstrap/pkg/discovery"
 )
 
-func TestElectLeader_OldestNodeWins(t *testing.T) {
-	now := time.Now()
-
-	localNode := discovery.DiscoveredNode{
-		IP:             netip.MustParseAddr("192.168.1.10"),
-		IsControlPlane: true,
-		CreationTime:   now.Add(5 * time.Second), // 5 seconds newer
-		Hostname:       "node-a",
-	}
-
-	peers := []discovery.DiscoveredNode{
-		{
-			IP:             netip.MustParseAddr("192.168.1.11"),
-			IsControlPlane: true,
-			CreationTime:   now, // oldest
-			Hostname:       "node-b",
-		},
-		{
-			IP:             netip.MustParseAddr("192.168.1.12"),
-			IsControlPlane: true,
-			CreationTime:   now.Add(3 * time.Second),
-			Hostname:       "node-c",
-		},
-	}
-
-	result := ElectLeader(localNode, peers)
-
-	if result.IsLeader {
-		t.Error("expected local node not to be leader")
-	}
-	if result.Leader.IP.String() != "192.168.1.11" {
-		t.Errorf("expected leader to be 192.168.1.11, got %s", result.Leader.IP)
-	}
-	if len(result.Candidates) != 3 {
-		t.Errorf("expected 3 candidates, got %d", len(result.Candidates))
-	}
-}
-
-func TestElectLeader_TieBreakByIP(t *testing.T) {
-	now := time.Now()
-
+func TestElectLeader_LowestIPWins(t *testing.T) {
 	localNode := discovery.DiscoveredNode{
 		IP:             netip.MustParseAddr("192.168.1.12"),
 		IsControlPlane: true,
-		CreationTime:   now, // same time
+		CreationTime:   time.Now(),
 		Hostname:       "node-a",
 	}
 
@@ -60,13 +20,13 @@ func TestElectLeader_TieBreakByIP(t *testing.T) {
 		{
 			IP:             netip.MustParseAddr("192.168.1.10"), // lowest IP
 			IsControlPlane: true,
-			CreationTime:   now, // same time
+			CreationTime:   time.Now(),
 			Hostname:       "node-b",
 		},
 		{
 			IP:             netip.MustParseAddr("192.168.1.11"),
 			IsControlPlane: true,
-			CreationTime:   now, // same time
+			CreationTime:   time.Now(),
 			Hostname:       "node-c",
 		},
 	}
@@ -102,13 +62,11 @@ func TestElectLeader_SingleNode(t *testing.T) {
 	}
 }
 
-func TestElectLeader_LocalNodeIsOldest(t *testing.T) {
-	now := time.Now()
-
+func TestElectLeader_LocalNodeIsLowestIP(t *testing.T) {
 	localNode := discovery.DiscoveredNode{
 		IP:             netip.MustParseAddr("192.168.1.10"),
 		IsControlPlane: true,
-		CreationTime:   now, // oldest
+		CreationTime:   time.Now(),
 		Hostname:       "node-a",
 	}
 
@@ -116,13 +74,13 @@ func TestElectLeader_LocalNodeIsOldest(t *testing.T) {
 		{
 			IP:             netip.MustParseAddr("192.168.1.11"),
 			IsControlPlane: true,
-			CreationTime:   now.Add(5 * time.Second),
+			CreationTime:   time.Now(),
 			Hostname:       "node-b",
 		},
 		{
 			IP:             netip.MustParseAddr("192.168.1.12"),
 			IsControlPlane: true,
-			CreationTime:   now.Add(10 * time.Second),
+			CreationTime:   time.Now(),
 			Hostname:       "node-c",
 		},
 	}
@@ -130,7 +88,7 @@ func TestElectLeader_LocalNodeIsOldest(t *testing.T) {
 	result := ElectLeader(localNode, peers)
 
 	if !result.IsLeader {
-		t.Error("expected local node to be leader (oldest)")
+		t.Error("expected local node to be leader (lowest IP)")
 	}
 	if result.Leader.IP.String() != "192.168.1.10" {
 		t.Errorf("expected leader to be 192.168.1.10, got %s", result.Leader.IP)
@@ -138,12 +96,10 @@ func TestElectLeader_LocalNodeIsOldest(t *testing.T) {
 }
 
 func TestElectLeader_OnlyControlPlaneParticipate(t *testing.T) {
-	now := time.Now()
-
 	localNode := discovery.DiscoveredNode{
 		IP:             netip.MustParseAddr("192.168.1.10"),
 		IsControlPlane: true,
-		CreationTime:   now.Add(10 * time.Second), // newest CP
+		CreationTime:   time.Now(),
 		Hostname:       "cp-a",
 	}
 
@@ -151,13 +107,13 @@ func TestElectLeader_OnlyControlPlaneParticipate(t *testing.T) {
 		{
 			IP:             netip.MustParseAddr("192.168.1.11"),
 			IsControlPlane: false, // worker - should be excluded
-			CreationTime:   now,   // oldest but worker
+			CreationTime:   time.Now(),
 			Hostname:       "worker-a",
 		},
 		{
 			IP:             netip.MustParseAddr("192.168.1.12"),
 			IsControlPlane: true,
-			CreationTime:   now.Add(5 * time.Second),
+			CreationTime:   time.Now(),
 			Hostname:       "cp-b",
 		},
 	}
@@ -169,12 +125,12 @@ func TestElectLeader_OnlyControlPlaneParticipate(t *testing.T) {
 		t.Errorf("expected 2 candidates (only control plane), got %d", len(result.Candidates))
 	}
 
-	// cp-b should be leader (older than cp-a)
-	if result.Leader.IP.String() != "192.168.1.12" {
-		t.Errorf("expected leader to be 192.168.1.12, got %s", result.Leader.IP)
+	// cp-a (192.168.1.10) should be leader (lowest IP among control plane)
+	if result.Leader.IP.String() != "192.168.1.10" {
+		t.Errorf("expected leader to be 192.168.1.10, got %s", result.Leader.IP)
 	}
-	if result.IsLeader {
-		t.Error("expected local node not to be leader")
+	if !result.IsLeader {
+		t.Error("expected local node to be leader")
 	}
 }
 

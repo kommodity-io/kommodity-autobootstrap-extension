@@ -15,6 +15,18 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 )
 
+const (
+	// maxScanPrefixBits is the narrowest accepted scan CIDR prefix.
+	// Prefixes narrower than /30 yield fewer than two host addresses, so
+	// peer discovery can never reach quorum.
+	maxScanPrefixBits = 30
+
+	// minScanPrefixBits is the widest accepted scan CIDR prefix.
+	// Prefixes wider than /16 span multiple subnets and can produce an
+	// unbounded number of probe targets, risking exhaustion and long scans.
+	minScanPrefixBits = 16
+)
+
 // NetworkInfo holds discovered network configuration from COSI resources.
 type NetworkInfo struct {
 	// LocalIP is this node's IP address
@@ -144,6 +156,26 @@ func GetNetworkInfo() (*NetworkInfo, error) {
 	}
 
 	return info, nil
+}
+
+// ParseScanCIDR parses and validates an operator-supplied scan CIDR override.
+// It trims surrounding whitespace, requires a valid IPv4 CIDR within the
+// scannable prefix range, and returns the masked prefix. A malformed,
+// non-IPv4, or out-of-range value returns an error.
+func ParseScanCIDR(override string) (netip.Prefix, error) {
+	trimmed := strings.TrimSpace(override)
+	prefix, err := netip.ParsePrefix(trimmed)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("failed to parse scan CIDR override %q: %w", override, err)
+	}
+	if !prefix.Addr().Is4() {
+		return netip.Prefix{}, fmt.Errorf("scan CIDR override %q must be IPv4", override)
+	}
+	if bits := prefix.Bits(); bits > maxScanPrefixBits || bits < minScanPrefixBits {
+		return netip.Prefix{}, fmt.Errorf("scan CIDR override %q must be between /%d and /%d",
+			override, minScanPrefixBits, maxScanPrefixBits)
+	}
+	return prefix.Masked(), nil
 }
 
 // getDefaultGateway reads the default gateway from /proc/net/route.
