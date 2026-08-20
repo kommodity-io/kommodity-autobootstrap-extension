@@ -166,7 +166,7 @@ func isControlPlane() bool {
 // runBootstrapLoop is the main loop that handles discovery, election, and bootstrap.
 func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config, scanCIDROverride netip.Prefix, tlsConfig *tls.Config) error {
 	backoff := 5 * time.Second
-	coordinator := bootstrap.NewCoordinator(client, cfg.PreBootstrapDelay)
+	coordinator := bootstrap.NewCoordinator(client, cfg.PreBootstrapDelay, tlsConfig)
 
 	for {
 		select {
@@ -254,7 +254,16 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 
 		// This node is the leader - execute bootstrap
 		zap.L().Info("elected as leader, initiating bootstrap")
-		err = coordinator.SafeBootstrap(ctx)
+
+		// Collect peer IPs for the bootstrap safety check
+		var peerIPs []netip.Addr
+		for _, peer := range peers {
+			if peer.IsControlPlane {
+				peerIPs = append(peerIPs, peer.IP)
+			}
+		}
+
+		err = coordinator.SafeBootstrap(ctx, peerIPs)
 		if err != nil {
 			zap.L().Error("bootstrap failed, retrying", zap.Error(err))
 			time.Sleep(backoff)
