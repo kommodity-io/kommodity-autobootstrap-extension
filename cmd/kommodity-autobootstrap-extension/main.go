@@ -43,10 +43,9 @@ const (
 	// short enough to notice a stuck cluster.
 	//
 	// Measured in elapsed time rather than scan rounds: a round costs a full
-	// sweep of the range when quorum is unmet, because the scan only returns
-	// early once enough control planes answer. On a large range that is minutes
-	// per round, so a round count would delay the warning by however long the
-	// sweep happens to take.
+	// sweep of the range, which is seconds on a /24 and minutes on a /16, so a
+	// round count would delay the warning by however long the sweep happens to
+	// take.
 	QuorumWarnAfter = 3 * time.Minute
 )
 

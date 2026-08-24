@@ -69,9 +69,8 @@ func TestLogRetryFailure(t *testing.T) {
 }
 
 // The quorum warning is measured in elapsed time rather than scan rounds. A
-// round costs a full sweep of the range while quorum is unmet, since the scan
-// only returns early once enough control planes answer, so a round count delays
-// the warning by however long the sweep takes.
+// round costs a full sweep of the range, so a round count delays the warning by
+// however long the sweep takes.
 func TestQuorumWarnUsesElapsedTime(t *testing.T) {
 	base := time.Unix(0, 0)
 
