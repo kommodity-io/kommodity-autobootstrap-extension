@@ -115,6 +115,15 @@ func GetNetworkInfo(scanCIDR string) (*NetworkInfo, error) {
 			return nil, fmt.Errorf("invalid TALOS_AUTO_BOOTSTRAP_SCAN_CIDR %q: %w", scanCIDR, err)
 		}
 
+		// Discovery enumerates every address in the range, which does not
+		// translate to IPv6: a /64 cannot be swept. Said here, where the
+		// operator's own value is in hand, rather than leaving it to the range
+		// guard, whose advice is to set the variable they have just set.
+		if !prefix.Addr().Is4() {
+			return nil, fmt.Errorf("TALOS_AUTO_BOOTSTRAP_SCAN_CIDR %q is IPv6; "+
+				"peer discovery scans IPv4 ranges only", scanCIDR)
+		}
+
 		info.CIDR = prefix.Masked()
 	default:
 		if prefix, ok := networkPrefixFrom(routes, info.LinkName, info.LocalIP); ok {

@@ -278,3 +278,42 @@ eth0	0000000A	00000000	0001	0	0	0	00FF00FF	0	0	0
 		})
 	}
 }
+
+// A bad override must fail rather than fall back to the detected range. A typo
+// that silently reverted to a /32 interface prefix would leave the node scanning
+// nothing and bootstrapping alone, which is the case this override exists for.
+func TestGetNetworkInfoRejectsBadScanCIDR(t *testing.T) {
+	tests := []struct {
+		name     string
+		scanCIDR string
+		wantIn   string
+	}{
+		{
+			name: "not a prefix at all", scanCIDR: "not-a-cidr",
+			wantIn: "TALOS_AUTO_BOOTSTRAP_SCAN_CIDR",
+		},
+		{
+			name: "bare address without a prefix length", scanCIDR: "10.0.0.0",
+			wantIn: "TALOS_AUTO_BOOTSTRAP_SCAN_CIDR",
+		},
+		{
+			// The range guard would otherwise advise setting the variable that
+			// has just been set.
+			name: "IPv6 is not scannable", scanCIDR: "fd00::/64",
+			wantIn: "IPv6",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := GetNetworkInfo(tt.scanCIDR)
+			if err == nil {
+				t.Fatalf("expected %q to be refused", tt.scanCIDR)
+			}
+
+			if !strings.Contains(err.Error(), tt.wantIn) {
+				t.Errorf("error should mention %q, got: %v", tt.wantIn, err)
+			}
+		})
+	}
+}
