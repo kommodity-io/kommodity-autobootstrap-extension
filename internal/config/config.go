@@ -26,8 +26,11 @@ type Config struct {
 	// ScanTimeout is the timeout for probing each node during discovery
 	ScanTimeout time.Duration `envconfig:"TALOS_AUTO_BOOTSTRAP_SCAN_TIMEOUT" default:"2s"`
 
-	// ScanConcurrency is the maximum number of concurrent node probes
-	ScanConcurrency int `envconfig:"TALOS_AUTO_BOOTSTRAP_SCAN_CONCURRENCY" default:"256"`
+	// ScanConcurrency is the maximum number of concurrent node probes.
+	// Each probe holds one socket while it is in flight, so this is also the
+	// peak file descriptor cost of a sweep. Raise it to shorten a large range,
+	// at the cost of that many concurrent connections.
+	ScanConcurrency int `envconfig:"TALOS_AUTO_BOOTSTRAP_SCAN_CONCURRENCY" default:"128"`
 
 	// ScanCIDR overrides the auto-detected network to scan for peers.
 	// Required where the node address is a /32 and no route
