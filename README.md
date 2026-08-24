@@ -127,8 +127,7 @@ Implements a deterministic leader election algorithm:
 
 1. Collect all control plane nodes (including self)
 2. Wait until quorum is reached (configurable)
-3. Sort by boot time (oldest first), read from each node's kernel boot time where
-   the peer reports one, falling back to the lowest IP otherwise
+3. Sort by boot time (oldest first), read from each node's kernel boot time
 4. Tie-break by IP address (lowest wins)
 5. First node in sorted list becomes leader
 
