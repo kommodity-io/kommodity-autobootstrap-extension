@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -128,10 +129,10 @@ func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 
 // probeTalosNode attempts to connect to a potential Talos node and retrieve its info.
 //
-// clientTLS supplies the client certificate. Server verification stays off:
-// peer certificates are issued for each node's own address and this probes
-// addresses that may not be Talos nodes at all, so the identity that matters
-// here is ours to apid, not apid's to us.
+// clientTLS is used as given, so the peer is verified against the machine CA and
+// its certificate must name the address dialled. Anything else answering on the
+// port fails the handshake and is never reported as a peer. It must carry a CA:
+// probing without one is refused rather than downgraded to an unverified dial.
 func probeTalosNode(ctx context.Context, ip netip.Addr, timeout time.Duration,
 	clientTLS *tls.Config) (*DiscoveredNode, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -139,19 +140,23 @@ func probeTalosNode(ctx context.Context, ip netip.Addr, timeout time.Duration,
 
 	endpoint := fmt.Sprintf("%s:%d", ip.String(), TalosAPIPort)
 
-	probeTLS := &tls.Config{
-		InsecureSkipVerify: true,
-		MinVersion:         tls.VersionTLS12,
-	}
-	if clientTLS != nil {
-		probeTLS.Certificates = clientTLS.Certificates
+	// Talos signs each node's apid certificate with the machine CA and puts the
+	// node's own addresses in its SANs, so verifying against clientTLS's CA and
+	// dialling by IP both succeed with no special handling. waitForApid relies
+	// on the same match for the local node.
+	//
+	// Refuse to probe without a CA rather than falling back to an unverified
+	// dial: nothing would then distinguish a peer from anything else answering
+	// on the port, which is the case this verification exists to reject.
+	if clientTLS == nil || clientTLS.RootCAs == nil {
+		return nil, errors.New("no machine CA to verify peers against")
 	}
 
 	client, err := talosclient.New(ctx,
 		talosclient.WithEndpoints(endpoint),
-		talosclient.WithTLSConfig(probeTLS),
+		talosclient.WithTLSConfig(clientTLS),
 		talosclient.WithGRPCDialOptions(
-			grpc.WithTransportCredentials(credentials.NewTLS(probeTLS)),
+			grpc.WithTransportCredentials(credentials.NewTLS(clientTLS)),
 		),
 	)
 	if err != nil {

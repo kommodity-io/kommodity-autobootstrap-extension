@@ -4,34 +4,38 @@ import (
 	"context"
 	"crypto/tls"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 )
 
-// The probe must present the caller's client certificate. apid requires
-// client-cert auth, so a probe without one is rejected on the RPC and the peer
-// looks like an empty address.
-func TestProbeUsesClientCertificate(t *testing.T) {
-	clientTLS := &tls.Config{
-		Certificates: []tls.Certificate{{Certificate: [][]byte{{0x01, 0x02}}}},
-		MinVersion:   tls.VersionTLS12,
-	}
-
-	// Probing an address with nothing listening fails, but it must fail after
-	// building a config that carries the certificate, not before.
+// Probing without a machine CA is refused outright. Falling back to an
+// unverified dial would leave nothing to distinguish a peer from anything else
+// answering on the port, so the caller has to supply one.
+func TestProbeRequiresMachineCA(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := probeTalosNode(ctx, netip.MustParseAddr("127.0.0.1"), 50*time.Millisecond, clientTLS)
-	if err == nil {
-		t.Fatal("expected an error probing an address with no Talos node")
-	}
+	ip := netip.MustParseAddr("127.0.0.1")
 
-	// A nil config must not panic: discovery still runs before credentials
-	// exist in some paths.
-	_, err = probeTalosNode(ctx, netip.MustParseAddr("127.0.0.1"), 50*time.Millisecond, nil)
-	if err == nil {
-		t.Fatal("expected an error probing an address with no Talos node")
+	for _, tt := range []struct {
+		name      string
+		clientTLS *tls.Config
+	}{
+		{name: "no config at all", clientTLS: nil},
+		{name: "config without a CA", clientTLS: &tls.Config{MinVersion: tls.VersionTLS12}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := probeTalosNode(ctx, ip, 50*time.Millisecond, tt.clientTLS)
+			if err == nil {
+				t.Fatal("expected the probe to be refused")
+			}
+
+			// Refused before dialling, not by whatever the dial happened to hit.
+			if !strings.Contains(err.Error(), "machine CA") {
+				t.Errorf("expected a refusal naming the missing CA, got: %v", err)
+			}
+		})
 	}
 }
 
