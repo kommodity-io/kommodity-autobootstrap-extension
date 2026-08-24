@@ -9,6 +9,8 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+
+	"go.uber.org/zap"
 )
 
 // NetworkInfo holds discovered network configuration.
@@ -126,6 +128,12 @@ func GetNetworkInfo(scanCIDR string) (*NetworkInfo, error) {
 // readProcRoutes reads and parses the kernel routing table.
 // Uses /host/proc when running in a container to avoid conflicting with the
 // container's own /proc.
+//
+// An unreadable routing table is reported rather than returned as an empty
+// list. Without routes the scan range falls back to the interface prefix, which
+// on a platform that hands out a /32 node address contains no other hosts: the
+// node then scans nothing, finds no peers and looks like it is alone. That is
+// the failure this package exists to avoid, and it is silent unless said here.
 func readProcRoutes() []procRoute {
 	file, err := os.Open("/host/proc/net/route")
 	if err != nil {
@@ -133,6 +141,9 @@ func readProcRoutes() []procRoute {
 	}
 
 	if err != nil {
+		zap.L().Warn("could not read the kernel routing table, "+
+			"falling back to the interface address prefix", zap.Error(err))
+
 		return nil
 	}
 
