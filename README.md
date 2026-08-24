@@ -105,7 +105,19 @@ Discovers peer Talos nodes via CIDR network scanning:
   `TALOS_AUTO_BOOTSTRAP_SCAN_CIDR` when auto-detection cannot find the network.
   Ranges from `/16` to `/30` are scanned; a `/31` or `/32` has no peers to find,
   and anything wider than a `/16` is too many probes to be useful
-- Uses insecure TLS for discovery (required for unknown nodes)
+- Sweeps the whole range before electing, so that every node elects from the same
+  set of candidates. Addresses with nothing listening cost the full
+  `TALOS_AUTO_BOOTSTRAP_SCAN_TIMEOUT`, so a `/16` takes several minutes at the
+  default settings and a `/24` a few seconds. Narrowing the range with
+  `TALOS_AUTO_BOOTSTRAP_SCAN_CIDR` is the way to make discovery faster
+- Authenticates every probe with the generated `os:admin` client certificate and
+  verifies the peer against the machine CA. The name on the peer's certificate is
+  checked too: Talos issues each node a certificate carrying its own addresses,
+  and the scan dials peers by address, so anything else answering on the port
+  fails the handshake and is never treated as a peer. A probe without a CA to
+  verify against is refused rather than falling back to an unverified connection
+- Scans IPv4 ranges only. Discovery enumerates every address in the range, which
+  does not translate to IPv6
 - Identifies control plane vs worker nodes via machine type
 - Retrieves boot time for leader election
 
@@ -115,7 +127,8 @@ Implements a deterministic leader election algorithm:
 
 1. Collect all control plane nodes (including self)
 2. Wait until quorum is reached (configurable)
-3. Sort by boot time (oldest first), read from each node's kernel boot time
+3. Sort by boot time (oldest first), read from each node's kernel boot time where
+   the peer reports one, falling back to the lowest IP otherwise
 4. Tie-break by IP address (lowest wins)
 5. First node in sorted list becomes leader
 
