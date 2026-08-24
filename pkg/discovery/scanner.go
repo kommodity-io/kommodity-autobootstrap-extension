@@ -52,14 +52,14 @@ type DiscoveredNode struct {
 // requires client-cert auth, so a probe without one connects and is then
 // rejected on the RPC, which is indistinguishable from an empty address.
 //
-// The scan stops as soon as enough control plane peers are found to satisfy
-// wantControlPlanes. Authenticated probes to empty addresses cost the full
-// timeout, so sweeping a whole /16 takes minutes; peers sit at the low
-// addresses and are found in the first moments, and waiting for the remaining
-// timeouts would withhold them for no benefit. Pass 0 to sweep the range.
+// The whole range is swept before returning, and probes to empty addresses cost
+// the full timeout, so a /16 takes minutes. That cost buys a candidate set that
+// depends only on which nodes are reachable: election sorts over the set it is
+// given, so two nodes electing different leaders and both bootstrapping is
+// avoidable only where they agree on the set.
 func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 	localIP netip.Addr, timeout time.Duration, concurrency int,
-	clientTLS *tls.Config, wantControlPlanes int) ([]DiscoveredNode, error) {
+	clientTLS *tls.Config) ([]DiscoveredNode, error) {
 
 	var (
 		nodes   []DiscoveredNode
@@ -87,14 +87,8 @@ func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 		return nil, fmt.Errorf("scan CIDR %s yielded no addresses to probe", cidr)
 	}
 
-	// Cancelling this context stops the remaining probes once we have enough.
-	scanCtx, stop := context.WithCancel(ctx)
-	defer stop()
-
-	g, gctx := errgroup.WithContext(scanCtx)
+	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
-
-	var found int
 
 	for _, ip := range ips {
 		// Skip local IP
@@ -118,22 +112,12 @@ func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 
 			nodes = append(nodes, *node)
 
-			if node.IsControlPlane {
-				found++
-				// The local node counts toward quorum, so one fewer peer is
-				// needed than the configured total. With no quorum target, or
-				// where peers never answer, the full range is probed.
-				if wantControlPlanes > 0 && found >= wantControlPlanes-1 {
-					stop()
-				}
-			}
-
 			return nil
 		})
 	}
 
-	// Errors here are cancellation from the early return, not probe failures:
-	// probes never return one.
+	// Errors here are cancellation of ctx, not probe failures: probes never
+	// return one.
 	_ = g.Wait()
 
 	nodesMu.Lock()
