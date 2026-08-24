@@ -16,9 +16,12 @@ import (
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
 	configres "github.com/siderolabs/talos/pkg/machinery/resources/config"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -105,7 +108,9 @@ func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 		g.Go(func() error {
 			node, err := probeTalosNode(gctx, ip, timeout, clientTLS)
 			if err != nil {
-				return nil // Not a Talos node or unreachable, skip silently
+				reportProbeError(ip, err)
+
+				return nil
 			}
 
 			nodesMu.Lock()
@@ -125,6 +130,29 @@ func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 	defer nodesMu.Unlock()
 
 	return nodes, nil
+}
+
+// reportProbeError logs a failed probe if the failure says something an operator
+// can act on.
+//
+// Most addresses in a scanned range have nothing listening, so a failed probe is
+// the ordinary case and stays silent; warning on it would fire thousands of times
+// on a healthy sweep. Being refused by something that did answer is different: it
+// means our credentials are wrong, and a scan that finds nobody for that reason
+// is indistinguishable from an empty network.
+//
+// The codes are not interchangeable. An address with nothing listening reports
+// Unavailable, an unroutable one DeadlineExceeded, and a failed TLS handshake
+// Unavailable again, so only a peer that completed TLS and then processed the
+// call can produce these two.
+func reportProbeError(ip netip.Addr, err error) {
+	if code := status.Code(err); code != codes.Unauthenticated &&
+		code != codes.PermissionDenied {
+		return
+	}
+
+	zap.L().Warn("peer refused our credentials",
+		zap.String("ip", ip.String()), zap.Error(err))
 }
 
 // probeTalosNode attempts to connect to a potential Talos node and retrieve its info.
