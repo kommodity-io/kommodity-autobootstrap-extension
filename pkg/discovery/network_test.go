@@ -317,3 +317,18 @@ func TestGetNetworkInfoRejectsBadScanCIDR(t *testing.T) {
 		})
 	}
 }
+
+// A valid override replaces the detected range, and is masked so an override
+// given as a host address still scans the network it belongs to.
+func TestGetNetworkInfoAppliesScanCIDR(t *testing.T) {
+	// Deliberately not a range any interface here is on, so the assertion shows
+	// the override won rather than coinciding with detection.
+	info, err := GetNetworkInfo("10.99.0.4/16")
+	if err != nil {
+		t.Skipf("no usable interface in this environment: %v", err)
+	}
+
+	if info.CIDR.String() != "10.99.0.0/16" {
+		t.Errorf("expected the override to win and be masked, got %s", info.CIDR)
+	}
+}
