@@ -49,9 +49,11 @@ type DiscoveredNode struct {
 // ScanCIDRForTalosNodes scans a CIDR range for Talos nodes.
 // It probes each IP address in the range concurrently.
 //
-// clientTLS carries the client certificate used to authenticate to peers. apid
-// requires client-cert auth, so a probe without one connects and is then
-// rejected on the RPC, which is indistinguishable from an empty address.
+// clientTLS carries the client certificate and the machine CA used to
+// authenticate to peers. apid requires client-cert auth, so a probe without one
+// connects and is then rejected on the RPC, which is indistinguishable from an
+// empty address. It is variadic so that callers written against the original
+// signature keep working; only the first value is read.
 //
 // The whole range is swept before returning, and probes to empty addresses cost
 // the full timeout, so a /16 takes minutes. That cost buys a candidate set that
@@ -60,7 +62,12 @@ type DiscoveredNode struct {
 // avoidable only where they agree on the set.
 func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 	localIP netip.Addr, timeout time.Duration, concurrency int,
-	clientTLS *tls.Config) ([]DiscoveredNode, error) {
+	clientTLS ...*tls.Config) ([]DiscoveredNode, error) {
+
+	var probeTLS *tls.Config
+	if len(clientTLS) > 0 {
+		probeTLS = clientTLS[0]
+	}
 
 	var (
 		nodes   []DiscoveredNode
@@ -106,7 +113,7 @@ func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 
 		ip := ip // capture for goroutine
 		g.Go(func() error {
-			node, err := probeTalosNode(gctx, ip, timeout, clientTLS)
+			node, err := probeTalosNode(gctx, ip, timeout, probeTLS)
 			if err != nil {
 				reportProbeError(ip, err)
 

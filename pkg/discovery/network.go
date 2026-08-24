@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -11,6 +12,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/cosi-project/runtime/pkg/safe"
+	"github.com/cosi-project/runtime/pkg/state"
+	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	"go.uber.org/zap"
 )
 
@@ -48,14 +52,81 @@ type procRoute struct {
 	gateway netip.Addr
 }
 
+// GetNetworkInfoFromCOSI retrieves network configuration from Talos COSI state.
+//
+// Deprecated: extensions are denied COSI access, so this cannot run in the
+// context the extension actually has; GetNetworkInfo reads the same information
+// from /proc and the net package. Retained because it is exported.
+//
+// It carries the /32 limitation the route-based path exists to avoid: the CIDR
+// comes from the interface address, so a single-host address yields a range with
+// no other hosts in it.
+func GetNetworkInfoFromCOSI(ctx context.Context, st state.State) (*NetworkInfo, error) {
+	addresses, err := safe.StateListAll[*network.AddressStatus](ctx, st)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list addresses: %w", err)
+	}
+
+	var info *NetworkInfo
+
+	for addr := range addresses.All() {
+		spec := addr.TypedSpec()
+
+		// Skip loopback, link-local, and IPv6 addresses
+		if spec.Address.Addr().IsLoopback() ||
+			spec.Address.Addr().IsLinkLocalUnicast() ||
+			spec.Address.Addr().Is6() {
+			continue
+		}
+
+		info = &NetworkInfo{
+			LocalIP:  spec.Address.Addr(),
+			CIDR:     spec.Address.Masked(),
+			LinkName: spec.LinkName,
+		}
+
+		break
+	}
+
+	if info == nil {
+		return nil, ErrNoNetwork
+	}
+
+	// Get default gateway from routes
+	routes, err := safe.StateListAll[*network.RouteStatus](ctx, st)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list routes: %w", err)
+	}
+
+	for route := range routes.All() {
+		spec := route.TypedSpec()
+		// Default route has destination with 0 bits (0.0.0.0/0)
+		if spec.Destination.Bits() == 0 && spec.Gateway.IsValid() {
+			info.Gateway = spec.Gateway
+
+			break
+		}
+	}
+
+	return info, nil
+}
+
 // GetNetworkInfo retrieves network configuration using Go's net package.
 // This is used instead of COSI when COSI access is not available.
 //
-// The scan CIDR is resolved in order: the scanCIDR override, a route describing
+// The scan CIDR is resolved in order: an explicit override, a route describing
 // the node network, then the interface address prefix. Some clouds assign /32
 // node addresses, where the interface prefix contains no other hosts and only
 // the route describes the real network.
-func GetNetworkInfo(scanCIDR string) (*NetworkInfo, error) {
+//
+// The override is variadic so that callers written against the original
+// no-argument form keep working; only the first value is read.
+func GetNetworkInfo(override ...string) (*NetworkInfo, error) {
+	var scanCIDR string
+	if len(override) > 0 {
+		scanCIDR = override[0]
+	}
+
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get network interfaces: %w", err)
