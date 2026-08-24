@@ -25,17 +25,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-const (
-	// TalosAPIPort is the default port for Talos API.
-	TalosAPIPort = 50000
-
-	// minScanPrefixBits is the widest network to scan. A /16 is 65534 probes.
-	minScanPrefixBits = 16
-
-	// maxScanPrefixBits is the narrowest network with a usable host range.
-	// A /31 or /32 contains no other hosts to discover.
-	maxScanPrefixBits = 30
-)
+// TalosAPIPort is the default port for Talos API.
+const TalosAPIPort = 50000
 
 // ErrUnusableRange reports that the range offered to the scan has no host range
 // worth probing. The same /32 interface address that triggers it is what a node

@@ -14,6 +14,15 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// minScanPrefixBits is the widest network to scan. A /16 is 65534 probes.
+	minScanPrefixBits = 16
+
+	// maxScanPrefixBits is the narrowest network with a usable host range.
+	// A /31 or /32 contains no other hosts to discover.
+	maxScanPrefixBits = 30
+)
+
 // ErrNoNetwork reports that no usable interface address was found. The
 // interface may simply not be up yet, which is ordinary at early boot and
 // resolves on a later attempt, so this is not a configuration fault.
