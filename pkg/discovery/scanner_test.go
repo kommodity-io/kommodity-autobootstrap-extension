@@ -69,6 +69,12 @@ func TestScanRejectsUnusableRangeBeforeProbing(t *testing.T) {
 			if elapsed := time.Since(start); elapsed > time.Second {
 				t.Errorf("refusal took %s, should be immediate", elapsed)
 			}
+
+			// The caller logs these at Warn rather than Error on the strength
+			// of the sentinel, so it has to survive the wrapping above.
+			if !errors.Is(err, ErrUnusableRange) {
+				t.Errorf("expected ErrUnusableRange, got %v", err)
+			}
 		})
 	}
 }

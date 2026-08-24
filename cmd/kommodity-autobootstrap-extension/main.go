@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -146,6 +147,24 @@ func isControlPlane() bool {
 	return err == nil
 }
 
+// logRetryFailure reports a failed round of the bootstrap loop, at Warn where a
+// later round can resolve the condition and at Error where it cannot.
+//
+// The interface and its route both appear after this loop starts, so a node that
+// has not finished configuring its network produces these on the first rounds and
+// succeeds on a later one. Logging that at Error puts the level that means
+// "someone has to act" on the ordinary path of every boot, which is how a level
+// stops being read.
+func logRetryFailure(msg string, err error) {
+	if errors.Is(err, discovery.ErrNoNetwork) || errors.Is(err, discovery.ErrUnusableRange) {
+		zap.L().Warn(msg, zap.Error(err))
+
+		return
+	}
+
+	zap.L().Error(msg, zap.Error(err))
+}
+
 // runBootstrapLoop is the main loop that handles discovery, election, and bootstrap.
 func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config,
 	tlsConfig *tls.Config) error {
@@ -170,7 +189,7 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 		// (COSI access is not available to extensions)
 		netInfo, err := discovery.GetNetworkInfo(cfg.ScanCIDR)
 		if err != nil {
-			zap.L().Error("failed to get network info, retrying", zap.Error(err))
+			logRetryFailure("failed to get network info, retrying", err)
 			time.Sleep(backoff)
 			continue
 		}
@@ -184,9 +203,9 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 		peers, err := discovery.ScanCIDRForTalosNodes(ctx, netInfo.CIDR,
 			netInfo.LocalIP, cfg.ScanTimeout, cfg.ScanConcurrency, tlsConfig)
 		if err != nil {
-			// A scan that cannot run is operator-actionable, not transient:
-			// proceeding would elect a leader from a candidate set of one.
-			zap.L().Error("network scan failed, not electing a leader", zap.Error(err))
+			// Never proceed on a failed scan: electing from a candidate set of
+			// one is what produces two clusters.
+			logRetryFailure("network scan failed, not electing a leader", err)
 			time.Sleep(backoff)
 			continue
 		}

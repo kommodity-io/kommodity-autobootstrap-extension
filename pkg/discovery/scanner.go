@@ -37,6 +37,12 @@ const (
 	maxScanPrefixBits = 30
 )
 
+// ErrUnusableRange reports that the range offered to the scan has no host range
+// worth probing. The same /32 interface address that triggers it is what a node
+// has before its route appears, so an early attempt can hit this and a later one
+// succeed.
+var ErrUnusableRange = errors.New("scan range is not usable")
+
 // DiscoveredNode represents a Talos node found during network scanning.
 type DiscoveredNode struct {
 	// IP is the node's IP address
@@ -76,19 +82,22 @@ func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 	// a failed bootstrap retries, a split one does not.
 	if cidr.Bits() > maxScanPrefixBits {
 		return nil, fmt.Errorf("scan CIDR %s has no usable host range; "+
-			"set TALOS_AUTO_BOOTSTRAP_SCAN_CIDR to the node network", cidr)
+			"set TALOS_AUTO_BOOTSTRAP_SCAN_CIDR to the node network: %w",
+			cidr, ErrUnusableRange)
 	}
 
 	if cidr.Bits() < minScanPrefixBits {
 		return nil, fmt.Errorf("scan CIDR %s is too large to scan; "+
-			"set TALOS_AUTO_BOOTSTRAP_SCAN_CIDR to a /16 or narrower", cidr)
+			"set TALOS_AUTO_BOOTSTRAP_SCAN_CIDR to a /16 or narrower: %w",
+			cidr, ErrUnusableRange)
 	}
 
 	ips := GenerateIPsInCIDR(cidr)
 	// Never proceed on an empty scan: it is indistinguishable from having
 	// scanned the network and found no peers.
 	if len(ips) == 0 {
-		return nil, fmt.Errorf("scan CIDR %s yielded no addresses to probe", cidr)
+		return nil, fmt.Errorf("scan CIDR %s yielded no addresses to probe: %w",
+			cidr, ErrUnusableRange)
 	}
 
 	g, gctx := errgroup.WithContext(ctx)

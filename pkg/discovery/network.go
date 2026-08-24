@@ -3,6 +3,7 @@ package discovery
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,11 @@ import (
 
 	"go.uber.org/zap"
 )
+
+// ErrNoNetwork reports that no usable interface address was found. The
+// interface may simply not be up yet, which is ordinary at early boot and
+// resolves on a later attempt, so this is not a configuration fault.
+var ErrNoNetwork = errors.New("no suitable network address found")
 
 // NetworkInfo holds discovered network configuration.
 type NetworkInfo struct {
@@ -96,7 +102,7 @@ func GetNetworkInfo(scanCIDR string) (*NetworkInfo, error) {
 	}
 
 	if info == nil {
-		return nil, fmt.Errorf("no suitable network address found")
+		return nil, ErrNoNetwork
 	}
 
 	routes := readProcRoutes()

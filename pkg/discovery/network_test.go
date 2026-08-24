@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"errors"
 	"net/netip"
 	"strings"
 	"testing"
@@ -330,5 +331,17 @@ func TestGetNetworkInfoAppliesScanCIDR(t *testing.T) {
 
 	if info.CIDR.String() != "10.99.0.0/16" {
 		t.Errorf("expected the override to win and be masked, got %s", info.CIDR)
+	}
+}
+
+// GetNetworkInfo reports a missing interface address through a sentinel, so the
+// caller can tell an early-boot condition that resolves itself from an operator
+// error that will not.
+func TestGetNetworkInfoNoNetworkIsSentinel(t *testing.T) {
+	// A malformed override is an operator error and must not be mistaken for
+	// the transient case.
+	_, err := GetNetworkInfo("not-a-cidr")
+	if errors.Is(err, ErrNoNetwork) {
+		t.Errorf("a bad override must not report ErrNoNetwork, got %v", err)
 	}
 }
