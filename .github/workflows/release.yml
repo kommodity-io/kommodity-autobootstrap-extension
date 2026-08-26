@@ -29,8 +29,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: stable
-          check-latest: true
+          go-version-file: go.mod
 
       - name: Install dependencies
         run: go mod download
