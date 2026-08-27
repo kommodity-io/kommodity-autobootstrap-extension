@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -13,13 +15,28 @@ import (
 	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
+	"go.uber.org/zap"
 )
 
-// NetworkInfo holds discovered network configuration from COSI resources.
+const (
+	// minScanPrefixBits is the widest network to scan. A /16 is 65534 probes.
+	minScanPrefixBits = 16
+
+	// maxScanPrefixBits is the narrowest network with a usable host range.
+	// A /31 or /32 contains no other hosts to discover.
+	maxScanPrefixBits = 30
+)
+
+// ErrNoNetwork reports that no usable interface address was found. The
+// interface may simply not be up yet, which is ordinary at early boot and
+// resolves on a later attempt, so this is not a configuration fault.
+var ErrNoNetwork = errors.New("no suitable network address found")
+
+// NetworkInfo holds discovered network configuration.
 type NetworkInfo struct {
 	// LocalIP is this node's IP address
 	LocalIP netip.Addr
-	// CIDR is the network prefix (e.g., 192.168.1.0/24)
+	// CIDR is the network prefix to scan for peers (e.g., 192.168.1.0/24)
 	CIDR netip.Prefix
 	// Gateway is the default gateway address
 	Gateway netip.Addr
@@ -27,7 +44,23 @@ type NetworkInfo struct {
 	LinkName string
 }
 
+// procRoute is a single parsed row of /proc/net/route.
+type procRoute struct {
+	iface   string
+	dest    netip.Addr
+	mask    netip.Addr
+	gateway netip.Addr
+}
+
 // GetNetworkInfoFromCOSI retrieves network configuration from Talos COSI state.
+//
+// Deprecated: extensions are denied COSI access, so this cannot run in the
+// context the extension actually has; GetNetworkInfo reads the same information
+// from /proc and the net package. Retained because it is exported.
+//
+// It carries the /32 limitation the route-based path exists to avoid: the CIDR
+// comes from the interface address, so a single-host address yields a range with
+// no other hosts in it.
 func GetNetworkInfoFromCOSI(ctx context.Context, st state.State) (*NetworkInfo, error) {
 	addresses, err := safe.StateListAll[*network.AddressStatus](ctx, st)
 	if err != nil {
@@ -51,11 +84,12 @@ func GetNetworkInfoFromCOSI(ctx context.Context, st state.State) (*NetworkInfo, 
 			CIDR:     spec.Address.Masked(),
 			LinkName: spec.LinkName,
 		}
+
 		break
 	}
 
 	if info == nil {
-		return nil, fmt.Errorf("no suitable network address found")
+		return nil, ErrNoNetwork
 	}
 
 	// Get default gateway from routes
@@ -69,6 +103,7 @@ func GetNetworkInfoFromCOSI(ctx context.Context, st state.State) (*NetworkInfo, 
 		// Default route has destination with 0 bits (0.0.0.0/0)
 		if spec.Destination.Bits() == 0 && spec.Gateway.IsValid() {
 			info.Gateway = spec.Gateway
+
 			break
 		}
 	}
@@ -78,7 +113,20 @@ func GetNetworkInfoFromCOSI(ctx context.Context, st state.State) (*NetworkInfo, 
 
 // GetNetworkInfo retrieves network configuration using Go's net package.
 // This is used instead of COSI when COSI access is not available.
-func GetNetworkInfo() (*NetworkInfo, error) {
+//
+// The scan CIDR is resolved in order: an explicit override, a route describing
+// the node network, then the interface address prefix. Some clouds assign /32
+// node addresses, where the interface prefix contains no other hosts and only
+// the route describes the real network.
+//
+// The override is variadic so that callers written against the original
+// no-argument form keep working; only the first value is read.
+func GetNetworkInfo(override ...string) (*NetworkInfo, error) {
+	var scanCIDR string
+	if len(override) > 0 {
+		scanCIDR = override[0]
+	}
+
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get network interfaces: %w", err)
@@ -134,78 +182,197 @@ func GetNetworkInfo() (*NetworkInfo, error) {
 	}
 
 	if info == nil {
-		return nil, fmt.Errorf("no suitable network address found")
+		return nil, ErrNoNetwork
 	}
 
-	// Get default gateway from /proc/net/route
-	gateway, err := getDefaultGateway()
-	if err == nil {
-		info.Gateway = gateway
+	routes := readProcRoutes()
+
+	// Gateway is informational only, so failure is not fatal.
+	if gw, ok := defaultGatewayFrom(routes); ok {
+		info.Gateway = gw
+	}
+
+	switch {
+	case scanCIDR != "":
+		// Fail rather than fall back: a typo here would leave the node scanning
+		// a /32 and bootstrapping alone.
+		prefix, err := netip.ParsePrefix(scanCIDR)
+		if err != nil {
+			return nil, fmt.Errorf("invalid TALOS_AUTO_BOOTSTRAP_SCAN_CIDR %q: %w", scanCIDR, err)
+		}
+
+		// Discovery enumerates every address in the range, which does not
+		// translate to IPv6: a /64 cannot be swept. Said here, where the
+		// operator's own value is in hand, rather than leaving it to the range
+		// guard, whose advice is to set the variable they have just set.
+		if !prefix.Addr().Is4() {
+			return nil, fmt.Errorf("TALOS_AUTO_BOOTSTRAP_SCAN_CIDR %q is IPv6; "+
+				"peer discovery scans IPv4 ranges only", scanCIDR)
+		}
+
+		info.CIDR = prefix.Masked()
+	default:
+		if prefix, ok := networkPrefixFrom(routes, info.LinkName, info.LocalIP); ok {
+			info.CIDR = prefix
+		}
 	}
 
 	return info, nil
 }
 
-// getDefaultGateway reads the default gateway from /proc/net/route.
-// Uses /host/proc when running in container to avoid conflicting with container's /proc.
-func getDefaultGateway() (netip.Addr, error) {
-	// Try /host/proc first (container environment), then /proc (native)
+// readProcRoutes reads and parses the kernel routing table.
+// Uses /host/proc when running in a container to avoid conflicting with the
+// container's own /proc.
+//
+// An unreadable routing table is reported rather than returned as an empty
+// list. Without routes the scan range falls back to the interface prefix, which
+// on a platform that hands out a /32 node address contains no other hosts: the
+// node then scans nothing, finds no peers and looks like it is alone. That is
+// the failure this package exists to avoid, and it is silent unless said here.
+func readProcRoutes() []procRoute {
 	file, err := os.Open("/host/proc/net/route")
 	if err != nil {
 		file, err = os.Open("/proc/net/route")
 	}
+
 	if err != nil {
-		return netip.Addr{}, err
+		zap.L().Warn("could not read the kernel routing table, "+
+			"falling back to the interface address prefix", zap.Error(err))
+
+		return nil
 	}
+
 	defer func() { _ = file.Close() }()
 
-	scanner := bufio.NewScanner(file)
+	return parseRoutes(file)
+}
+
+// parseRoutes parses /proc/net/route rows. Fields are hex little-endian:
+// 0=interface, 1=destination, 2=gateway, 7=mask.
+func parseRoutes(r io.Reader) []procRoute {
+	var routes []procRoute
+
+	scanner := bufio.NewScanner(r)
 	// Skip header line
 	scanner.Scan()
 
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
-		if len(fields) < 3 {
+		if len(fields) < 8 {
 			continue
 		}
 
-		// Destination is field 1, Gateway is field 2
-		// Default route has destination 00000000
-		if fields[1] == "00000000" {
-			// Gateway is in hex, little-endian
-			var gw uint32
-			if _, err := fmt.Sscanf(fields[2], "%x", &gw); err != nil {
-				continue
-			}
-			// Convert from little-endian
-			gwBytes := make([]byte, 4)
-			binary.LittleEndian.PutUint32(gwBytes, gw)
-			addr, ok := netip.AddrFromSlice(gwBytes)
-			if ok {
-				return addr, nil
-			}
+		dest, ok := hexLEAddr(fields[1])
+		if !ok {
+			continue
+		}
+
+		gateway, ok := hexLEAddr(fields[2])
+		if !ok {
+			continue
+		}
+
+		mask, ok := hexLEAddr(fields[7])
+		if !ok {
+			continue
+		}
+
+		routes = append(routes, procRoute{
+			iface:   fields[0],
+			dest:    dest,
+			mask:    mask,
+			gateway: gateway,
+		})
+	}
+
+	return routes
+}
+
+// defaultGatewayFrom returns the gateway of the default route (destination 0.0.0.0).
+func defaultGatewayFrom(routes []procRoute) (netip.Addr, bool) {
+	for _, route := range routes {
+		if route.dest.IsUnspecified() && !route.gateway.IsUnspecified() {
+			return route.gateway, true
 		}
 	}
 
-	return netip.Addr{}, fmt.Errorf("no default gateway found")
+	return netip.Addr{}, false
+}
+
+// networkPrefixFrom returns the prefix of the route for iface that describes
+// the node network: a route to a network (not the default route) whose range
+// contains localIP.
+//
+// The route may or may not have a gateway. Some clouds hand out a /32 node
+// address and reach the rest of the network through a gateway, so requiring a
+// gateway-less route would miss the only route that names the real network.
+// Ranges outside the scannable bounds are ignored rather than selected and then
+// refused, so a node seeing both a usable and an unusable range picks the usable
+// one. When several routes match, the longest (narrowest) prefix wins.
+func networkPrefixFrom(routes []procRoute, iface string, localIP netip.Addr) (netip.Prefix, bool) {
+	var (
+		best  netip.Prefix
+		found bool
+	)
+
+	for _, route := range routes {
+		if route.iface != iface || route.dest.IsUnspecified() {
+			continue
+		}
+
+		maskBytes := route.mask.As4()
+
+		ones, bits := net.IPMask(maskBytes[:]).Size()
+		// Size reports 0,0 for a non-contiguous mask.
+		if bits == 0 || ones < minScanPrefixBits || ones > maxScanPrefixBits {
+			continue
+		}
+
+		prefix := netip.PrefixFrom(route.dest, ones).Masked()
+		if !prefix.Contains(localIP) {
+			continue
+		}
+
+		if !found || prefix.Bits() > best.Bits() {
+			best = prefix
+			found = true
+		}
+	}
+
+	return best, found
+}
+
+// hexLEAddr decodes a /proc/net/route hex little-endian IPv4 field.
+func hexLEAddr(s string) (netip.Addr, bool) {
+	var val uint32
+	if _, err := fmt.Sscanf(s, "%x", &val); err != nil {
+		return netip.Addr{}, false
+	}
+
+	buf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(buf, val)
+
+	return netip.AddrFromSlice(buf)
 }
 
 // GenerateIPsInCIDR generates all host IP addresses within a CIDR range,
-// excluding network and broadcast addresses.
+// excluding network and broadcast addresses. Prefixes outside /16../30 return
+// nothing; ScanCIDRForTalosNodes rejects those with a clear error first.
 func GenerateIPsInCIDR(cidr netip.Prefix) []netip.Addr {
-	var ips []netip.Addr
+	// 10.0.0.4/16 must generate from 10.0.0.1, not 10.0.0.5.
+	cidr = cidr.Masked()
 
-	addr := cidr.Addr()
 	bits := cidr.Bits()
-	hostBits := 32 - bits
-	numHosts := 1 << hostBits
+	if !cidr.Addr().Is4() || bits < minScanPrefixBits || bits > maxScanPrefixBits {
+		return nil
+	}
 
+	numHosts := 1 << (32 - bits)
+
+	ips := make([]netip.Addr, 0, numHosts-2)
 	// Skip network address (i=0) and broadcast address (i=numHosts-1)
 	for i := 1; i < numHosts-1; i++ {
-		ip := addToIP(addr, i)
-		if ip.IsValid() && cidr.Contains(ip) {
-			ips = append(ips, ip)
-		}
+		ips = append(ips, addToIP(cidr.Addr(), i))
 	}
 
 	return ips
@@ -217,6 +384,7 @@ func addToIP(ip netip.Addr, offset int) netip.Addr {
 	val := uint32(bytes[0])<<24 | uint32(bytes[1])<<16 |
 		uint32(bytes[2])<<8 | uint32(bytes[3])
 	val += uint32(offset)
+
 	return netip.AddrFrom4([4]byte{
 		byte(val >> 24), byte(val >> 16), byte(val >> 8), byte(val),
 	})

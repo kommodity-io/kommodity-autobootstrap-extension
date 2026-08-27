@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -74,7 +75,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 	// Get network info first to determine local IP for apid connection.
 	// apid's TLS certificate is issued for the node's IP, so we must connect
 	// using the actual IP (not localhost) for certificate validation to pass.
-	netInfo, err := discovery.GetNetworkInfo()
+	netInfo, err := discovery.GetNetworkInfo(cfg.ScanCIDR)
 	if err != nil {
 		return fmt.Errorf("failed to get network info: %w", err)
 	}
@@ -110,7 +111,7 @@ func run(ctx context.Context, cfg *config.Config) error {
 		return nil
 	}
 
-	return runBootstrapLoop(ctx, client, cfg)
+	return runBootstrapLoop(ctx, client, cfg, tlsConfig)
 }
 
 // waitForApid waits for apid to become available and connects with TLS credentials.
@@ -146,8 +147,27 @@ func isControlPlane() bool {
 	return err == nil
 }
 
+// logRetryFailure reports a failed round of the bootstrap loop, at Warn where a
+// later round can resolve the condition and at Error where it cannot.
+//
+// The interface and its route both appear after this loop starts, so a node that
+// has not finished configuring its network produces these on the first rounds and
+// succeeds on a later one. Logging that at Error puts the level that means
+// "someone has to act" on the ordinary path of every boot, which is how a level
+// stops being read.
+func logRetryFailure(msg string, err error) {
+	if errors.Is(err, discovery.ErrNoNetwork) || errors.Is(err, discovery.ErrUnusableRange) {
+		zap.L().Warn(msg, zap.Error(err))
+
+		return
+	}
+
+	zap.L().Error(msg, zap.Error(err))
+}
+
 // runBootstrapLoop is the main loop that handles discovery, election, and bootstrap.
-func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config) error {
+func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *config.Config,
+	tlsConfig *tls.Config) error {
 	backoff := 5 * time.Second
 	coordinator := bootstrap.NewCoordinator(client, cfg.PreBootstrapDelay)
 
@@ -167,9 +187,9 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 
 		// Get network information using filesystem/net package
 		// (COSI access is not available to extensions)
-		netInfo, err := discovery.GetNetworkInfo()
+		netInfo, err := discovery.GetNetworkInfo(cfg.ScanCIDR)
 		if err != nil {
-			zap.L().Warn("failed to get network info, retrying", zap.Error(err))
+			logRetryFailure("failed to get network info, retrying", err)
 			time.Sleep(backoff)
 			continue
 		}
@@ -181,14 +201,28 @@ func runBootstrapLoop(ctx context.Context, client *talosclient.Client, cfg *conf
 
 		// Scan CIDR for peer Talos nodes
 		peers, err := discovery.ScanCIDRForTalosNodes(ctx, netInfo.CIDR,
-			netInfo.LocalIP, cfg.ScanTimeout, cfg.ScanConcurrency)
+			netInfo.LocalIP, cfg.ScanTimeout, cfg.ScanConcurrency, tlsConfig)
 		if err != nil {
-			zap.L().Warn("network scan failed, retrying", zap.Error(err))
+			// Never proceed on a failed scan: electing from a candidate set of
+			// one is what produces two clusters.
+			logRetryFailure("network scan failed, not electing a leader", err)
 			time.Sleep(backoff)
 			continue
 		}
 
-		zap.L().Info("peer discovery complete", zap.Int("peers_found", len(peers)))
+		controlPlanePeers := 0
+
+		for _, peer := range peers {
+			if peer.IsControlPlane {
+				controlPlanePeers++
+			}
+		}
+
+		// peers_found counts every Talos node that answered, workers included.
+		// Only control planes are candidates for quorum and election.
+		zap.L().Info("peer discovery complete",
+			zap.Int("peers_found", len(peers)),
+			zap.Int("controlplane_peers", controlPlanePeers))
 		for _, peer := range peers {
 			zap.L().Debug("discovered peer",
 				zap.String("ip", peer.IP.String()),

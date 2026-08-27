@@ -9,7 +9,10 @@ require (
 	github.com/siderolabs/talos/pkg/machinery v1.11.0
 	go.uber.org/zap v1.27.0
 	golang.org/x/sync v0.17.0
+	golang.org/x/sys v0.37.0
 	google.golang.org/grpc v1.75.1
+	google.golang.org/protobuf v1.36.8
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -55,11 +58,8 @@ require (
 	golang.org/x/crypto v0.43.0 // indirect
 	golang.org/x/exp v0.0.0-20250717185816-542afb5b7346 // indirect
 	golang.org/x/net v0.45.0 // indirect
-	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250715232539-7130f93afb79 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250715232539-7130f93afb79 // indirect
-	google.golang.org/protobuf v1.36.8 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

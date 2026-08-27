@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -14,16 +15,24 @@ import (
 	"github.com/cosi-project/runtime/pkg/safe"
 	talosclient "github.com/siderolabs/talos/pkg/machinery/client"
 	configres "github.com/siderolabs/talos/pkg/machinery/resources/config"
-	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
+	"github.com/siderolabs/talos/pkg/machinery/resources/network"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-const (
-	// TalosAPIPort is the default port for Talos API.
-	TalosAPIPort = 50000
-)
+// TalosAPIPort is the default port for Talos API.
+const TalosAPIPort = 50000
+
+// ErrUnusableRange reports that the range offered to the scan has no host range
+// worth probing. The same /32 interface address that triggers it is what a node
+// has before its route appears, so an early attempt can hit this and a later one
+// succeed.
+var ErrUnusableRange = errors.New("scan range is not usable")
 
 // DiscoveredNode represents a Talos node found during network scanning.
 type DiscoveredNode struct {
@@ -39,17 +48,57 @@ type DiscoveredNode struct {
 
 // ScanCIDRForTalosNodes scans a CIDR range for Talos nodes.
 // It probes each IP address in the range concurrently.
+//
+// clientTLS carries the client certificate and the machine CA used to
+// authenticate to peers. apid requires client-cert auth, so a probe without one
+// connects and is then rejected on the RPC, which is indistinguishable from an
+// empty address. It is variadic so that callers written against the original
+// signature keep working; only the first value is read.
+//
+// The whole range is swept before returning, and probes to empty addresses cost
+// the full timeout, so a /16 takes minutes. That cost buys a candidate set that
+// depends only on which nodes are reachable: election sorts over the set it is
+// given, so two nodes electing different leaders and both bootstrapping is
+// avoidable only where they agree on the set.
 func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
-	localIP netip.Addr, timeout time.Duration, concurrency int) ([]DiscoveredNode, error) {
+	localIP netip.Addr, timeout time.Duration, concurrency int,
+	clientTLS ...*tls.Config) ([]DiscoveredNode, error) {
+
+	var probeTLS *tls.Config
+	if len(clientTLS) > 0 {
+		probeTLS = clientTLS[0]
+	}
 
 	var (
 		nodes   []DiscoveredNode
 		nodesMu sync.Mutex
 	)
 
-	ips := GenerateIPsInCIDR(cidr)
+	// A /31 or /32 target means the CIDR came from a point-to-point or
+	// single-host interface address. Scanning it finds no peers, so every node
+	// would elect itself leader and bootstrap a separate etcd cluster. Refuse:
+	// a failed bootstrap retries, a split one does not.
+	if cidr.Bits() > maxScanPrefixBits {
+		return nil, fmt.Errorf("scan CIDR %s has no usable host range; "+
+			"set TALOS_AUTO_BOOTSTRAP_SCAN_CIDR to the node network: %w",
+			cidr, ErrUnusableRange)
+	}
 
-	g, ctx := errgroup.WithContext(ctx)
+	if cidr.Bits() < minScanPrefixBits {
+		return nil, fmt.Errorf("scan CIDR %s is too large to scan; "+
+			"set TALOS_AUTO_BOOTSTRAP_SCAN_CIDR to a /16 or narrower: %w",
+			cidr, ErrUnusableRange)
+	}
+
+	ips := GenerateIPsInCIDR(cidr)
+	// Never proceed on an empty scan: it is indistinguishable from having
+	// scanned the network and found no peers.
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("scan CIDR %s yielded no addresses to probe: %w",
+			cidr, ErrUnusableRange)
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
 
 	for _, ip := range ips {
@@ -58,41 +107,91 @@ func ScanCIDRForTalosNodes(ctx context.Context, cidr netip.Prefix,
 			continue
 		}
 
+		if gctx.Err() != nil {
+			break
+		}
+
 		ip := ip // capture for goroutine
 		g.Go(func() error {
-			node, err := probeTalosNode(ctx, ip, timeout)
+			node, err := probeTalosNode(gctx, ip, timeout, probeTLS)
 			if err != nil {
-				return nil // Not a Talos node or unreachable, skip silently
+				reportProbeError(ip, err)
+
+				return nil
 			}
 
 			nodesMu.Lock()
+			defer nodesMu.Unlock()
+
 			nodes = append(nodes, *node)
-			nodesMu.Unlock()
+
 			return nil
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
+	// Errors here are cancellation of ctx, not probe failures: probes never
+	// return one.
+	_ = g.Wait()
+
+	nodesMu.Lock()
+	defer nodesMu.Unlock()
 
 	return nodes, nil
 }
 
+// reportProbeError logs a failed probe if the failure says something an operator
+// can act on.
+//
+// Most addresses in a scanned range have nothing listening, so a failed probe is
+// the ordinary case and stays silent; warning on it would fire thousands of times
+// on a healthy sweep. Being refused by something that did answer is different: it
+// means our credentials are wrong, and a scan that finds nobody for that reason
+// is indistinguishable from an empty network.
+//
+// The codes are not interchangeable. An address with nothing listening reports
+// Unavailable, an unroutable one DeadlineExceeded, and a failed TLS handshake
+// Unavailable again, so only a peer that completed TLS and then processed the
+// call can produce these two.
+func reportProbeError(ip netip.Addr, err error) {
+	if code := status.Code(err); code != codes.Unauthenticated &&
+		code != codes.PermissionDenied {
+		return
+	}
+
+	zap.L().Warn("peer refused our credentials",
+		zap.String("ip", ip.String()), zap.Error(err))
+}
+
 // probeTalosNode attempts to connect to a potential Talos node and retrieve its info.
-func probeTalosNode(ctx context.Context, ip netip.Addr, timeout time.Duration) (*DiscoveredNode, error) {
+//
+// clientTLS is used as given, so the peer is verified against the machine CA and
+// its certificate must name the address dialled. Anything else answering on the
+// port fails the handshake and is never reported as a peer. It must carry a CA:
+// probing without one is refused rather than downgraded to an unverified dial.
+func probeTalosNode(ctx context.Context, ip netip.Addr, timeout time.Duration,
+	clientTLS *tls.Config) (*DiscoveredNode, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	endpoint := fmt.Sprintf("%s:%d", ip.String(), TalosAPIPort)
 
-	// Create client with insecure TLS (required for discovery of unknown nodes)
+	// Talos signs each node's apid certificate with the machine CA and puts the
+	// node's own addresses in its SANs, so verifying against clientTLS's CA and
+	// dialling by IP both succeed with no special handling. waitForApid relies
+	// on the same match for the local node.
+	//
+	// Refuse to probe without a CA rather than falling back to an unverified
+	// dial: nothing would then distinguish a peer from anything else answering
+	// on the port, which is the case this verification exists to reject.
+	if clientTLS == nil || clientTLS.RootCAs == nil {
+		return nil, errors.New("no machine CA to verify peers against")
+	}
+
 	client, err := talosclient.New(ctx,
 		talosclient.WithEndpoints(endpoint),
+		talosclient.WithTLSConfig(clientTLS),
 		talosclient.WithGRPCDialOptions(
-			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-				InsecureSkipVerify: true,
-			})),
+			grpc.WithTransportCredentials(credentials.NewTLS(clientTLS)),
 		),
 	)
 	if err != nil {
@@ -121,24 +220,31 @@ func probeTalosNode(ctx context.Context, ip netip.Addr, timeout time.Duration) (
 		hostname = version.Messages[0].Metadata.Hostname
 	}
 
-	// Get boot time from MachineStatus resource
+	// apid does not always populate hostname in the response metadata, which
+	// leaves a discovered peer nameless in the election logs. The local node
+	// falls back to /etc/hostname; for a peer, ask the node itself. Non-fatal:
+	// the election compares IPs, so a missing hostname only costs readability.
+	if hostname == "" {
+		hostnameStatus, err := safe.StateGet[*network.HostnameStatus](nodeCtx, client.COSI,
+			resource.NewMetadata(network.NamespaceName, network.HostnameStatusType,
+				network.HostnameID, resource.VersionUndefined))
+		if err == nil {
+			hostname = hostnameStatus.TypedSpec().Hostname
+		}
+	}
+
+	// SystemStat.BootTime is the peer's boot time, comparable to the local
+	// node's getBootTime(). Version.Built is not a substitute: it is the image
+	// build date and is identical on every node running the same Talos release.
+	//
+	// Keep it non-fatal even though the probe is authenticated: a denial or a
+	// transient failure here would otherwise drop a peer and leave the node
+	// believing it is alone, which is what the scan guards above exist to prevent.
 	bootTime := time.Now()
 
-	machineStatus, err := safe.StateGet[*runtimeres.MachineStatus](nodeCtx, client.COSI,
-		resource.NewMetadata(runtimeres.NamespaceName, runtimeres.MachineStatusType,
-			runtimeres.MachineStatusID, resource.VersionUndefined))
-	if err == nil && machineStatus.TypedSpec().Stage != runtimeres.MachineStageUnknown {
-		// Use version info if available
-		if len(version.Messages) > 0 && version.Messages[0].Version != nil {
-			// Parse built time as a proxy for consistent ordering
-			builtStr := version.Messages[0].Version.Built
-			if builtStr != "" {
-				parsed, err := time.Parse(time.RFC3339, builtStr)
-				if err == nil {
-					bootTime = parsed
-				}
-			}
-		}
+	if stat, err := client.MachineClient.SystemStat(nodeCtx, &emptypb.Empty{}); err == nil &&
+		len(stat.Messages) > 0 && stat.Messages[0].BootTime > 0 {
+		bootTime = time.Unix(int64(stat.Messages[0].BootTime), 0)
 	}
 
 	return &DiscoveredNode{
