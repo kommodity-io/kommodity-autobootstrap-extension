@@ -12,11 +12,27 @@ IMAGE ?= ghcr.io/kommodity-io/kommodity-autobootstrap-extension
 CONTAINER_RUNTIME ?= docker
 
 LINTER := bin/golangci-lint
+GOLANGCI_LINT_VERSION := v2.13.1
 
 .PHONY: golangci-lint
 golangci-lint: $(LINTER) ## Download golangci-lint locally if necessary.
+# install.sh cannot verify v2.12.0+: it greps the checksums file for the tarball
+# basename, which also matches the sibling .tar.gz.sbom.json line.
 $(LINTER):
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b bin/ v2.9.0
+	@mkdir -p bin
+	@set -e; \
+	OS=$$(go env GOOS); ARCH=$$(go env GOARCH); \
+	V=$(GOLANGCI_LINT_VERSION); V=$${V#v}; \
+	TARBALL=golangci-lint-$$V-$$OS-$$ARCH.tar.gz; \
+	TMP=$$(mktemp -d); trap 'rm -rf $$TMP' EXIT; \
+	curl -sSfL -o $$TMP/$$TARBALL https://github.com/golangci/golangci-lint/releases/download/$(GOLANGCI_LINT_VERSION)/$$TARBALL; \
+	curl -sSfL -o $$TMP/checksums.txt https://github.com/golangci/golangci-lint/releases/download/$(GOLANGCI_LINT_VERSION)/golangci-lint-$$V-checksums.txt; \
+	WANT=$$(grep " $$TARBALL$$" $$TMP/checksums.txt | cut -d' ' -f1); \
+	if [ -z "$$WANT" ]; then echo "no checksum found for $$TARBALL" >&2; exit 1; fi; \
+	if command -v sha256sum >/dev/null 2>&1; then GOT=$$(sha256sum $$TMP/$$TARBALL | cut -d' ' -f1); else GOT=$$(shasum -a 256 $$TMP/$$TARBALL | cut -d' ' -f1); fi; \
+	if [ "$$WANT" != "$$GOT" ]; then echo "golangci-lint checksum mismatch (expected $$WANT, got $$GOT)" >&2; exit 1; fi; \
+	tar -xzf $$TMP/$$TARBALL -C $$TMP; \
+	cp $$TMP/golangci-lint-$$V-$$OS-$$ARCH/golangci-lint $(LINTER)
 
 # Build the binary for Linux
 build: $(SOURCES) ## Build the application.
