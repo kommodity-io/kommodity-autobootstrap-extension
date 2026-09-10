@@ -17,7 +17,11 @@ COPY . .
 
 # Template extension manifest with build version.
 # Talos reads metadata.version from this file, not the image tag.
-RUN sed -i "s/__VERSION__/$(echo ${VERSION} | sed 's/^v//')/" manifest.yaml
+# VERSION is expected to be a semver git tag (e.g. v1.6.1); only digits and
+# dots remain after stripping the leading v, so no sed escaping is needed.
+RUN test -n "${VERSION}" \
+ && sed -i "s/__VERSION__/$(echo ${VERSION} | sed 's/^v//')/" manifest.yaml \
+ && ! grep -q '__VERSION__' manifest.yaml
 
 # Build the binary using Makefile
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 make build UPX_FLAGS= VERSION=${VERSION}
