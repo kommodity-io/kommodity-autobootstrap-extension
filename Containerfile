@@ -25,9 +25,11 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 make build UPX_FLAGS= VERSION=${VERSIO
 RUN mkdir -p \
     /app/rootfs/var/mnt \
     /app/rootfs/system/secrets \
+    /app/rootfs/system/state \
     /app/rootfs/dev \
     /app/rootfs/host/proc \
-    /app/rootfs/etc
+    /app/rootfs/etc \
+    /app/rootfs/run
 
 # Extension stage - Talos system extension format
 FROM scratch

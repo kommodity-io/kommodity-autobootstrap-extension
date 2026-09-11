@@ -35,8 +35,9 @@ func ReadCAFromStatePartition() (*MachineConfigCA, error) {
 
 	if rawErr := mountPartition(StatePartitionPath, mountPoint); rawErr != nil {
 		if encErr := mountPartition(StatePartitionEncryptedPath, mountPoint); encErr != nil {
-			return nil, fmt.Errorf("failed to mount STATE partition (tried %s: %v, and %s: %v)",
-				StatePartitionPath, rawErr, StatePartitionEncryptedPath, encErr)
+			return nil, fmt.Errorf("failed to mount STATE partition (tried %s: %v, and %s: %v); "+
+				"fast path /system/state also failed: %v",
+				StatePartitionPath, rawErr, StatePartitionEncryptedPath, encErr, fastErr)
 		}
 	}
 	defer func() { _ = unmountPartition(mountPoint) }()
