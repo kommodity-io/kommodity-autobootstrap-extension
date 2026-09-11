@@ -9,6 +9,13 @@ on:
       - main
   workflow_dispatch:
 
+# A push to a fix/** branch that already has a PR open triggers both the push
+# and the pull_request event. Keying the group on the head branch puts both runs
+# in the same group so the redundant one is cancelled instead of building twice.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build container image
@@ -19,8 +26,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # driver: docker uses the BuildKit built into the runner's Docker daemon
+      # instead of booting a moby/buildkit container. That avoids an anonymous
+      # Docker Hub pull, which is rate limited and has timed out in CI. The
+      # trade-off is that type=gha caching is unsupported by this driver.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
 
       - name: Build image
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.180
@@ -28,8 +41,5 @@ jobs:
           context: .
           file: Containerfile
           push: false
-          platforms: linux/amd64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           build-args: |
             VERSION=${{ github.sha }}
