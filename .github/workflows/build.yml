@@ -11,7 +11,7 @@ on:
 
 jobs:
   build:
-    name: Validate Containerfile builds
+    name: Build container image
     runs-on: ubuntu-latest
     permissions:
       contents: read
