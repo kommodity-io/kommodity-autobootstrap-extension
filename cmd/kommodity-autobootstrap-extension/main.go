@@ -66,7 +66,7 @@ func main() {
 func run(ctx context.Context, cfg *config.Config) error {
 	// Check if this is a control plane node using filesystem
 	// (etcd secrets directory only exists on control plane nodes)
-	if !isControlPlane() {
+	if !isControlPlane(ctx) {
 		zap.L().Info("worker node detected (no etcd secrets), exiting")
 		return nil
 	}
@@ -146,12 +146,17 @@ func waitForApid(ctx context.Context, tlsConfig *tls.Config, endpoint string) (*
 // on control plane nodes. The directory is created by the etcd controller
 // during boot, which may race with the extension startup. To handle this,
 // it retries for up to 2 minutes before concluding this is a worker node.
-func isControlPlane() bool {
+// The context is honoured so SIGTERM/SIGINT exits promptly mid-retry.
+func isControlPlane(ctx context.Context) bool {
 	for i := 0; i < 24; i++ {
 		if _, err := os.Stat(EtcdSecretsPath); err == nil {
 			return true
 		}
-		time.Sleep(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(5 * time.Second):
+		}
 	}
 	return false
 }

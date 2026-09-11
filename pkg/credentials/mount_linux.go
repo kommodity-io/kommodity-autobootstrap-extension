@@ -17,12 +17,13 @@ import (
 func ReadCAFromStatePartition() (*MachineConfigCA, error) {
 	// Fast path: Talos mounts the STATE partition at /system/state.
 	// Try reading config.yaml there first — no mount syscalls needed.
-	if ca, err := readConfigFromPath(SystemStateMountPath); err == nil {
+	ca, fastErr := readConfigFromPath(SystemStateMountPath)
+	if fastErr == nil {
 		return ca, nil
 	}
 
 	// Fallback: mount the raw STATE partition under /run/autobootstrap.
-	if err := os.MkdirAll(MountBasePath, 0700); err != nil {
+	if err := os.MkdirAll(MountBasePath, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create mount base directory: %w", err)
 	}
 
@@ -40,11 +41,12 @@ func ReadCAFromStatePartition() (*MachineConfigCA, error) {
 	}
 	defer func() { _ = unmountPartition(mountPoint) }()
 
-	ca, err := readConfigFromPath(mountPoint)
+	caFallback, err := readConfigFromPath(mountPoint)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read machine CA: %w", err)
+		return nil, fmt.Errorf("failed to read machine CA from raw mount %q: %w (fast path /system/state also failed: %v)",
+			mountPoint, err, fastErr)
 	}
-	return ca, nil
+	return caFallback, nil
 }
 
 const (
