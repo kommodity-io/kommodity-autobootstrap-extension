@@ -1,19 +1,16 @@
 name: Build
 
 on:
-  push:
-    branches:
-      - "fix/**"
   pull_request:
     branches:
       - main
   workflow_dispatch:
 
-# A push to a fix/** branch that already has a PR open triggers both the push
-# and the pull_request event. Keying the group on the head branch puts both runs
-# in the same group so the redundant one is cancelled instead of building twice.
+# Cancel superseded runs when new commits land on the same PR branch. All runs in
+# a group share the pull_request event, so the only run ever cancelled is one for
+# an older commit -- the check for the current head always survives.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
