@@ -148,7 +148,7 @@ func waitForApid(ctx context.Context, tlsConfig *tls.Config, endpoint string) (*
 // it retries for up to 2 minutes before concluding this is a worker node.
 // The context is honoured so SIGTERM/SIGINT exits promptly mid-retry.
 func isControlPlane(ctx context.Context) bool {
-	for i := 0; i < 24; i++ {
+	for range 24 {
 		if _, err := os.Stat(EtcdSecretsPath); err == nil {
 			return true
 		}
@@ -157,6 +157,11 @@ func isControlPlane(ctx context.Context) bool {
 			return false
 		case <-time.After(5 * time.Second):
 		}
+	}
+	// Final check after the last sleep — the directory may have been
+	// created during the final 5-second window.
+	if _, err := os.Stat(EtcdSecretsPath); err == nil {
+		return true
 	}
 	return false
 }
