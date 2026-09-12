@@ -9,6 +9,13 @@ container:
       options:
         - bind
         - ro
+    # /system/state for reading machine config CA without raw block device mount
+    - source: /system/state
+      destination: /system/state
+      type: bind
+      options:
+        - bind
+        - ro
     # /proc for reading boot time and network routes
     # Mount to /host/proc to avoid conflicting with container's own /proc
     - source: /proc
