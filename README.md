@@ -14,7 +14,7 @@ A Talos Linux system extension that automatically bootstraps Kubernetes clusters
 
 The extension runs as a Talos system extension service on control plane nodes. It:
 
-1. **Detects control plane nodes** by checking for the presence of `/system/secrets/etcd`
+1. **Detects control plane nodes** by checking for the presence of `/system/secrets/etcd` (retries for up to 2 minutes, as the etcd controller creates this directory during boot)
 2. **Generates admin credentials** by reading the machine CA from the STATE partition
 3. **Connects to the local Talos API** (apid) on port 50000
 4. **Discovers peer nodes** by scanning the local network CIDR
@@ -30,8 +30,8 @@ The extension runs as a Talos system extension service on control plane nodes. I
 │  ┌────────────────────────────────────────────────────────────────────┐  │
 │  │                         STARTUP PHASE                              │  │
 │  │                                                                    │  │
-│  │  1. Check /system/secrets/etcd (control plane detection)           │  │
-│  │  2. Exit if worker node (etcd secrets don't exist)                 │  │
+│  │  1. Check /system/secrets/etcd (retries up to 2 min)             │  │
+│  │  2. Exit if worker node (etcd secrets don't exist)               │  │
 │  │  3. Get network info (local IP, CIDR, gateway)                     │  │
 │  │  4. Read machine CA from STATE partition (/dev/disk/by-partlabel)  │  │
 │  │  5. Generate admin TLS credentials from machine CA                 │  │
@@ -248,6 +248,7 @@ The extension runs as a Talos extension service with the following characteristi
 - **Restart policy**: `untilSuccess` (keeps trying until bootstrap succeeds)
 - **Mounts**:
   - `/system/secrets` (read-only) - for control plane detection
+  - `/system/state` (read-only) - for machine CA fast path (falls back to raw mount)
   - `/proc` as `/host/proc` (read-only) - for boot time and network routes
   - `/etc` (read-only) - for hostname
   - `/dev` (read-only) - for STATE partition access
